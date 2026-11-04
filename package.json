@@ -11,7 +11,8 @@
     "db:seed": "tsx scripts/seed.ts",
     "typecheck": "tsc --noEmit",
     "db:check": "tsx scripts/check-security.ts",
-    "db:sample-leads": "tsx scripts/seed-sample-leads.ts"
+    "db:sample-leads": "tsx scripts/seed-sample-leads.ts",
+    "db:demo": "tsx scripts/seed-demo-users.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

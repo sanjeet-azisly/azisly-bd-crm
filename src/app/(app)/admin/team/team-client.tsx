@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { Copy, FileSpreadsheet, Mail, Pencil, Plus, Search, Send } from "lucide-react"
+import { Copy, FileSpreadsheet, Link2, Mail, Pencil, Plus, Search, Send } from "lucide-react"
 import { toast } from "sonner"
 import { Chip } from "@/components/chip"
 import { ConfirmButton } from "@/components/confirm-button"
@@ -15,7 +15,7 @@ import { NativeSelect } from "@/components/ui/native-select"
 import { PhoneInput } from "@/components/phone-input"
 import { TEAM_ROLE_LABEL, type Pod, type Profile, type TeamRole } from "@/lib/types"
 import { PHONE_ERROR, normalizePhone } from "@/lib/format"
-import { deleteMember, inviteMember, setMemberActive, updateMember } from "./actions"
+import { deleteMember, getLoginLink, inviteMember, setMemberActive, updateMember } from "./actions"
 import { BulkUploadDialog } from "./bulk-upload"
 import { describeOutcome, sendLinksTo } from "./send-links"
 
@@ -417,6 +417,23 @@ function EditDialog({
           <div className="mt-2 space-y-2 border-t pt-4">
             <p className="text-xs font-medium text-muted-foreground uppercase">Access</p>
             <div className="flex flex-wrap gap-2">
+              {profile.active && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    const res = await getLoginLink(profile.id, window.location.origin)
+                    if (!res.ok) return void toast.error(res.error)
+                    await navigator.clipboard.writeText(res.data!.link)
+                    toast.success("Login link copied", {
+                      description: "Open it in a private window to see the CRM as this person, or send it on WhatsApp. Works once, expires in 1 hour.",
+                      duration: 8000,
+                    })
+                  }}
+                >
+                  <Link2 /> Copy login link
+                </Button>
+              )}
               {profile.active && (
                 <Button
                   variant="outline"

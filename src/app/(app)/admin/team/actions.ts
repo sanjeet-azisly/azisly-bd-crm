@@ -294,3 +294,24 @@ export async function deleteMember(id: string): Promise<ActionResult> {
   refresh()
   return { ok: true }
 }
+
+/**
+ * A one-time login link for one team member, for the admin to open in a private
+ * window (to see the CRM as that person) or send on WhatsApp while email isn't set up.
+ * Works once and expires like any login link.
+ */
+export async function getLoginLink(id: string, origin: string): Promise<ActionResult<{ link: string; email: string }>> {
+  await requireAdmin()
+  if (!/^https?:\/\/[^/]+$/.test(origin)) return { ok: false, error: "Couldn’t work out the site address." }
+  const supabase = await createClient()
+  const { data: profile } = await supabase.from("profiles").select("email, active").eq("id", id).maybeSingle()
+  if (!profile) return { ok: false, error: "Team member not found." }
+  if (!profile.active) return { ok: false, error: "This person is deactivated. Reactivate them first." }
+  const { data, error } = await createAdminClient().auth.admin.generateLink({
+    type: "magiclink",
+    email: profile.email,
+    options: { redirectTo: `${origin}/auth/confirm` },
+  })
+  if (error || !data.properties?.action_link) return { ok: false, error: error?.message ?? "Couldn’t create the link." }
+  return { ok: true, data: { link: data.properties.action_link, email: profile.email } }
+}
