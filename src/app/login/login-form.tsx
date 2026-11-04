@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { createClient } from "@/lib/supabase/client"
 import { sendLoginLink } from "@/lib/supabase/login-link"
+import { completeEmailLogin } from "./actions"
 
 const NOT_INVITED = "This account isn’t on the Azisly BD team. Ask your program admin for an invite."
 
@@ -15,6 +16,9 @@ export function LoginForm() {
   const [sentTo, setSentTo] = useState<string | null>(null)
   const [cooldown, setCooldown] = useState(0)
   const [busy, setBusy] = useState(false)
+  // Password login (for accounts that have a password, e.g. demo accounts).
+  const [usePassword, setUsePassword] = useState(false)
+  const [password, setPassword] = useState("")
   const [error, setError] = useState<string | null>(null)
 
   // Google errors can arrive in the URL fragment, which the server never sees.
@@ -51,6 +55,27 @@ export function LoginForm() {
     setCooldown(60)
   }
 
+  async function passwordLogin(e: React.FormEvent) {
+    e.preventDefault()
+    setError(null)
+    const clean = email.trim().toLowerCase()
+    if (!/^\S+@\S+\.\S+$/.test(clean)) return setError("Enter a valid email address.")
+    if (!password) return setError("Enter your password.")
+    setBusy(true)
+    const { error } = await createClient().auth.signInWithPassword({ email: clean, password })
+    if (error) {
+      setBusy(false)
+      return setError(/invalid/i.test(error.message) ? "Email or password is wrong." : error.message)
+    }
+    const result = await completeEmailLogin()
+    if (result !== "ok") {
+      setBusy(false)
+      window.location.replace(`/login?error=${result}`)
+      return
+    }
+    window.location.replace("/today")
+  }
+
   async function google() {
     setError(null)
     setBusy(true)
@@ -78,7 +103,46 @@ export function LoginForm() {
         <span className="h-px flex-1 bg-border" /> or get a login link by email <span className="h-px flex-1 bg-border" />
       </div>
 
-      {!sentTo ? (
+      {usePassword ? (
+        <form onSubmit={passwordLogin} className="space-y-3" noValidate>
+          <div className="space-y-1.5">
+            <Label htmlFor="pw-email">Email</Label>
+            <Input
+              id="pw-email"
+              type="email"
+              inputMode="email"
+              autoComplete="username"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="h-11"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="pw">Password</Label>
+            <Input
+              id="pw"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="h-11"
+            />
+          </div>
+          <Button type="submit" className="h-11 w-full text-base" disabled={busy}>
+            {busy ? "Logging in…" : "Log in"}
+          </Button>
+          <button
+            type="button"
+            className="w-full text-center text-sm text-brand hover:underline"
+            onClick={() => {
+              setUsePassword(false)
+              setError(null)
+            }}
+          >
+            Use an email link instead
+          </button>
+        </form>
+      ) : !sentTo ? (
         <form onSubmit={sendLink} className="space-y-3" noValidate>
           <div className="space-y-1.5">
             <Label htmlFor="email">Your email</Label>
@@ -96,6 +160,16 @@ export function LoginForm() {
           <Button type="submit" className="h-11 w-full text-base" disabled={busy}>
             {busy ? "Sending…" : "Email me a login link"}
           </Button>
+          <button
+            type="button"
+            className="w-full text-center text-sm text-brand hover:underline"
+            onClick={() => {
+              setUsePassword(true)
+              setError(null)
+            }}
+          >
+            Log in with a password instead
+          </button>
         </form>
       ) : (
         <div className="space-y-3 rounded-2xl bg-surface p-6 text-sm">

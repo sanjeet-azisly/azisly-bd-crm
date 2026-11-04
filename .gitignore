@@ -47,3 +47,4 @@ next-env.d.ts
 /.claude/
 *.tsbuildinfo
 /vercel-keys-to-paste.txt
+/demo-logins.txt
