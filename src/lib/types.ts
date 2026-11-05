@@ -11,6 +11,9 @@ export type Profile = {
   referral_code: string | null
   active: boolean
   first_login_at: string | null
+  /** ID card photo in the private id-photos bucket. */
+  photo_path: string | null
+  photo_updated_at: string | null
   created_at: string
 }
 

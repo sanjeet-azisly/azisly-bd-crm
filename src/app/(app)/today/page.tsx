@@ -128,6 +128,18 @@ export default async function TodayPage() {
         </div>
       </div>
 
+      {!me.isAdmin && !me.profile.photo_path && (
+        <Link
+          href="/profile"
+          className="flex items-center justify-between rounded-xl bg-brand-soft px-5 py-4 text-sm text-brand"
+        >
+          <span>
+            <strong>Upload your ID card photo</strong> – a passport-size professional photo, takes a minute.
+          </span>
+          <ChevronRight className="size-4" />
+        </Link>
+      )}
+
       {meter}
 
       {/* Daily activity strip (spec 5.2.4) */}
