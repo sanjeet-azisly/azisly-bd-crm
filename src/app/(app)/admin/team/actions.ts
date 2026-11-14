@@ -108,6 +108,26 @@ async function canManage(actor: { me: CurrentUser; podId: string | null }, id: s
   return data.role === "intern" && data.pod_id === actor.podId ? data : null
 }
 
+/**
+ * A new pod for a manager added without one: "Pranav's team" (made unique if taken).
+ * The admin can rename it in Pods.
+ */
+async function newPodFor(fullName: string): Promise<string> {
+  const db = createAdminClient()
+  const first = fullName.trim().split(/\s+/)[0].slice(0, 30)
+  const { data: pods } = await db.from("pods").select("name")
+  const taken = new Set((pods ?? []).map((p) => p.name.toLowerCase()))
+  let name = `${first}’s team`
+  for (let n = 2; taken.has(name.toLowerCase()); n++) name = `${first}’s team ${n}`
+  const { data, error } = await db
+    .from("pods")
+    .insert({ name, colour: POD_COLOURS[taken.size % POD_COLOURS.length] })
+    .select("id")
+    .single()
+  if (error) throw new Error(`Couldn’t create a pod for ${first}: ${error.message}`)
+  return data.id
+}
+
 /** Makes `userId` the manager of `podId`, or clears any pod they run. */
 async function applyManager(userId: string, role: TeamRole, podId: string | null) {
   const db = createAdminClient()
@@ -181,11 +201,18 @@ export async function inviteMember(input: unknown): Promise<ActionResult<JoinLin
   if (!parsed.success) return { ok: false, error: firstError(parsed.error) }
   // Managers add interns to their own pod, whatever the form says.
   const m = actor.podId ? { ...parsed.data, role: "intern" as const, pod_id: actor.podId } : parsed.data
-  if (m.role === "manager" && !m.pod_id) return { ok: false, error: "Pick the pod this manager will run." }
 
   const db = createAdminClient()
   const { data: existing } = await db.from("profiles").select("full_name").eq("email", m.email).maybeSingle()
   if (existing) return { ok: false, error: `${m.email} is already on the team (${existing.full_name}).` }
+  // A manager added without a pod gets their own.
+  if (m.role === "manager" && !m.pod_id) {
+    try {
+      m.pod_id = await newPodFor(m.full_name)
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "Couldn’t create their pod." }
+    }
+  }
 
   const created = await createMember(m, actor.me.profile.id)
   if ("error" in created) return { ok: false, error: created.error }
@@ -257,6 +284,14 @@ export async function bulkImport(rows: BulkRow[]): Promise<ActionResult<BulkRowR
       }
     }
 
+    if (r.role === "manager" && !podId) {
+      try {
+        podId = await newPodFor(r.full_name)
+      } catch (e) {
+        results.push({ email: r.email, status: "error", message: e instanceof Error ? e.message : "Couldn’t create their pod." })
+        continue
+      }
+    }
     const created = await createMember({ ...r, pod_id: podId }, actor.me.profile.id)
     if ("error" in created) {
       results.push({ email: r.email, status: "error", message: created.error })
@@ -271,7 +306,7 @@ export async function bulkImport(rows: BulkRow[]): Promise<ActionResult<BulkRowR
       status: "created",
       link,
       text,
-      message: r.role === "manager" && !podId ? "Added as manager without a pod – choose their pod in Pods." : undefined,
+      message: undefined,
     })
   }
 
@@ -325,7 +360,14 @@ export async function updateMember(input: unknown): Promise<ActionResult> {
     return { ok: true }
   }
 
-  if (role === "manager" && !pod_id) return { ok: false, error: "A manager needs a pod to run." }
+  let podForRole = pod_id
+  if (role === "manager" && !podForRole) {
+    try {
+      podForRole = await newPodFor(full_name)
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : "Couldn’t create their pod." }
+    }
+  }
   if (id === actor.me.profile.id && role !== "admin") return { ok: false, error: "You can’t remove your own admin role." }
   const { error } = await db
     .from("profiles")
@@ -333,7 +375,7 @@ export async function updateMember(input: unknown): Promise<ActionResult> {
       full_name,
       phone,
       role,
-      pod_id,
+      pod_id: podForRole,
       referral_code,
       permissions: role === "manager" ? permissions : [],
       commission_pct: role === "manager" ? commission_pct : null,
@@ -343,7 +385,7 @@ export async function updateMember(input: unknown): Promise<ActionResult> {
     if (error.code === "23505") return { ok: false, error: `Referral code “${referral_code}” is already taken.` }
     return { ok: false, error: error.message }
   }
-  const managerError = await applyManager(id, role, pod_id)
+  const managerError = await applyManager(id, role, podForRole)
   if (managerError) return { ok: false, error: managerError }
 
   refresh()

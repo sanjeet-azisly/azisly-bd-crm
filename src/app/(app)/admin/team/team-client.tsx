@@ -219,7 +219,7 @@ function RoleAndPodFields({
       <div className="space-y-1.5">
         <Label htmlFor="pod">{role === "manager" ? "Pod they run" : "Pod"}</Label>
         <NativeSelect id="pod" value={podId} onChange={(e) => setPodId(e.target.value)}>
-          <option value="">{role === "manager" ? "Choose a pod" : "No pod"}</option>
+          <option value="">{role === "manager" ? "New pod for them" : "No pod"}</option>
           {pods.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -229,7 +229,9 @@ function RoleAndPodFields({
       </div>
       {role === "manager" && (
         <p className="text-xs text-muted-foreground sm:col-span-2">
-          Managers are Azisly staff. Each pod has one manager – choosing this replaces the pod’s current manager.
+          {podId
+            ? "Each pod has one manager – choosing this replaces the pod’s current manager."
+            : "They’ll get their own new pod (e.g. “Pranav’s team”). You can rename it in Pods."}
         </p>
       )}
     </div>

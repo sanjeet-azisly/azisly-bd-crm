@@ -198,7 +198,7 @@ export function BulkUploadDialog({
       else if (existingEmails.has(row.email)) {
         row.skip = true
         row.note = "Already on the team – will be skipped."
-      } else if (row.role === "manager" && !row.pod_name) row.note = "No pod – choose the pod they run later."
+      } else if (row.role === "manager" && !row.pod_name) row.note = "Gets their own new pod."
       else if (isAdmin && row.pod_name && !podNames.has(row.pod_name.toLowerCase())) row.note = `New pod “${row.pod_name}” will be created.`
       if (typeof phone === "string" && phone !== "invalid") row.phone = phone
       seen.add(row.email)
