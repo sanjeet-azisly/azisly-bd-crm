@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth"
 import type { ActionResult } from "@/lib/format"
 import { PHOTO_BUCKET } from "@/lib/id-photos"
 import { createAdminClient } from "@/lib/supabase/admin"
+import { createClient } from "@/lib/supabase/server"
 
 const MAX_BYTES = 2 * 1024 * 1024
 
@@ -38,5 +39,18 @@ export async function uploadIdPhoto(form: FormData): Promise<ActionResult> {
   revalidatePath("/profile")
   revalidatePath("/today")
   revalidatePath("/admin/photos")
+  return { ok: true }
+}
+
+/** Lets the signed-in person choose a new password (needs the current one). */
+export async function changePassword(current: string, next: string): Promise<ActionResult> {
+  const me = await requireUser()
+  if (next.length < 8 || next.length > 72) return { ok: false, error: "Use 8 to 72 characters." }
+  if (!/[A-Za-z]/.test(next) || !/[0-9]/.test(next)) return { ok: false, error: "Use letters and at least one number." }
+  const supabase = await createClient()
+  const { error: wrong } = await supabase.auth.signInWithPassword({ email: me.profile.email, password: current })
+  if (wrong) return { ok: false, error: "Your current password is wrong." }
+  const { error } = await supabase.auth.updateUser({ password: next })
+  if (error) return { ok: false, error: /same/i.test(error.message) ? "Pick a password you haven’t used." : error.message }
   return { ok: true }
 }

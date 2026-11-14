@@ -71,7 +71,7 @@ async function run() {
 
   // Admin
   const { data: adminInv } = await admin.from("invites").select("id")
-  check("Admin can read invites", (adminInv?.length ?? 0) >= 4)
+  check("Admin can read invites", (adminInv?.length ?? 0) >= 3)
   const { error: leaderErr } = await admin.from("pods").update({ leader_id: meera!.id }).eq("id", arjun!.pod_id!)
   check("A pod's manager must be a member of that pod", !!leaderErr)
   const { error: internLeadErr } = await admin.from("pods").update({ leader_id: arjun!.id }).eq("id", arjun!.pod_id!)
@@ -440,35 +440,63 @@ async function paymentChecks(c: {
   check("Refunded payments stop counting", !(lbRefund ?? []).some((p: { lead_id: string }) => p.lead_id === c.leadId))
 }
 
+const TEST_PEOPLE = [
+  { email: "sample.riya@example.com", full_name: "Riya Sample", role: "manager" },
+  { email: "sample.arjun@example.com", full_name: "Arjun Sample", role: "intern" },
+  { email: "sample.meera@example.com", full_name: "Meera Sample", role: "intern" },
+] as const
+
+/** Temporary test people, created for the checks and removed afterwards. */
+async function createTestPeople(podA: string, podB: string) {
+  for (const p of TEST_PEOPLE) {
+    const { data, error } = await service.auth.admin.createUser({ email: p.email, email_confirm: true })
+    if (error) throw new Error(`${p.email}: ${error.message}`)
+    const { error: pErr } = await service.from("profiles").insert({
+      id: data.user.id,
+      email: p.email,
+      full_name: p.full_name,
+      role: p.role,
+      pod_id: p.email === "sample.meera@example.com" ? podB : podA,
+    })
+    if (pErr) throw new Error(`${p.email}: ${pErr.message}`)
+    await service.from("invites").upsert({ email: p.email, full_name: p.full_name }, { onConflict: "email" })
+  }
+}
+
+async function removeTestPeople() {
+  const emails = TEST_PEOPLE.map((p) => p.email)
+  const { data } = await service.from("profiles").select("id").in("email", emails)
+  const ids = (data ?? []).map((p) => p.id)
+  if (ids.length) {
+    const { data: leads } = await service.from("leads").select("id, phone").in("owner_id", ids)
+    await cleanupTestLeads((leads ?? []).map((l) => l.phone))
+    await service.from("notifications").delete().in("user_id", ids)
+    await service.from("pods").update({ leader_id: null }).in("leader_id", ids)
+    for (const id of ids) await service.auth.admin.deleteUser(id)
+  }
+  await service.from("invites").delete().in("email", emails)
+}
+
 /**
  * The checks need a known layout: Riya (manager) + Arjun in one test pod, Meera in another.
- * Whatever pods these sample people are in now is put back afterwards.
+ * They are created just for the run and removed afterwards, so real data is never touched.
  */
 async function main() {
-  const emails = ["sample.riya@example.com", "sample.arjun@example.com", "sample.meera@example.com"]
-  const { data: before } = await service.from("profiles").select("id, email, pod_id, role, permissions, commission_pct").in("email", emails)
-  const { data: podsBefore } = await service.from("pods").select("id, leader_id")
-  const id = (e: string) => before!.find((p) => p.email === e)!.id
-
+  await removeTestPeople()
+  await service.from("pods").delete().in("name", ["_check A", "_check B"])
   const { data: testPods, error } = await service
     .from("pods")
     .insert([{ name: "_check A" }, { name: "_check B" }])
     .select("id")
   if (error) throw error
   try {
-    await service.from("profiles").update({ role: "manager" }).eq("id", id(emails[0]))
-    await service.from("profiles").update({ pod_id: testPods![0].id }).in("id", [id(emails[0]), id(emails[1])])
-    await service.from("profiles").update({ pod_id: testPods![1].id }).eq("id", id(emails[2]))
-    await service.from("pods").update({ leader_id: id(emails[0]) }).eq("id", testPods![0].id)
+    await createTestPeople(testPods![0].id, testPods![1].id)
+    const { data: riya } = await service.from("profiles").select("id").eq("email", TEST_PEOPLE[0].email).single()
+    await service.from("pods").update({ leader_id: riya!.id }).eq("id", testPods![0].id)
     await run()
   } finally {
-    for (const p of before!) {
-      await service
-        .from("profiles")
-        .update({ pod_id: p.pod_id, role: p.role, permissions: p.permissions, commission_pct: p.commission_pct })
-        .eq("id", p.id)
-    }
-    for (const p of podsBefore!) await service.from("pods").update({ leader_id: p.leader_id }).eq("id", p.id)
+    await removeTestPeople()
+    await service.from("notifications").delete().like("text", "%Sample%")
     await service.from("pods").delete().in("id", testPods!.map((p) => p.id))
   }
   console.log(failures ? `\n${failures} check(s) failed.` : "\nAll security checks passed.")

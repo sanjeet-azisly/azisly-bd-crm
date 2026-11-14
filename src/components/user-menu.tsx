@@ -12,14 +12,14 @@ export function roleLabel(me: CurrentUser) {
 export function UserMenu({ me, light = false, unread = 0 }: { me: CurrentUser; light?: boolean; unread?: number }) {
   return (
     <div className={cn("flex items-center gap-3", light ? "text-white" : "text-foreground")}>
-      <Link href="/profile" title="ID card photo" className="hidden min-w-0 text-right leading-tight min-[420px]:block md:block">
+      <Link href="/profile" title="My profile" className="hidden min-w-0 text-right leading-tight min-[420px]:block md:block">
         <p className="truncate text-sm font-medium">{me.profile.full_name}</p>
         <p className={cn("text-xs", light ? "text-white/60" : "text-muted-foreground")}>{roleLabel(me)}</p>
       </Link>
       <Link
         href="/profile"
         aria-label={me.profile.photo_path ? "ID card photo" : "Upload your ID card photo"}
-        title="ID card photo"
+        title="My profile"
         className={cn("relative rounded-lg p-2", light ? "hover:bg-white/10" : "hover:bg-muted")}
       >
         <IdCard className="size-4" />

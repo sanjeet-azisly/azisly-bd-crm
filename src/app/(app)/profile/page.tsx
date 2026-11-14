@@ -3,9 +3,10 @@ import { Chip } from "@/components/chip"
 import { PageHeader } from "@/components/page-header"
 import { requireUser } from "@/lib/auth"
 import { photoLinks } from "@/lib/id-photos"
+import { PasswordForm } from "./password-form"
 import { PhotoUploader } from "./photo-uploader"
 
-export const metadata = { title: "ID card photo · Azisly BD CRM" }
+export const metadata = { title: "My profile · Azisly BD CRM" }
 
 const DO = [
   "Plain white or light background",
@@ -28,8 +29,8 @@ export default async function ProfilePage() {
   return (
     <>
       <PageHeader
-        title="ID card photo"
-        description="Upload a passport-size professional photo. It goes on your Azisly ID card, so please follow the tips below."
+        title="My profile"
+        description="Your ID card photo and your password. The photo goes on your Azisly ID card, so please follow the tips below."
       />
 
       <section className="rounded-2xl bg-surface p-6 sm:p-8">
@@ -69,6 +70,11 @@ export default async function ProfilePage() {
             ))}
           </ul>
         </div>
+      </section>
+      <section id="password" className="mt-8 rounded-2xl bg-surface p-6 sm:p-8">
+        <h2 className="mb-1 text-lg font-semibold">Password</h2>
+        <p className="mb-6 text-sm text-muted-foreground">You log in with {me.profile.email} and this password.</p>
+        <PasswordForm />
       </section>
     </>
   )
