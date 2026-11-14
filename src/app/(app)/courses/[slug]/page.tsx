@@ -22,7 +22,7 @@ export default async function CoursePage({ params }: { params: Promise<{ slug: s
   const me = await requireUser()
   const supabase = await createClient()
   const { data } = await supabase.from("courses").select("*").eq("slug", slug).maybeSingle<Course>()
-  if (!data || (!data.active && !me.isAdmin)) notFound()
+  if (!data || (!data.active && !me.can("courses"))) notFound()
   const c = data
 
   return (
@@ -31,7 +31,7 @@ export default async function CoursePage({ params }: { params: Promise<{ slug: s
         <Link href="/courses" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
           <ArrowLeft className="size-4" /> Courses
         </Link>
-        {me.isAdmin && (
+        {me.can("courses") && (
           <Link href={`/admin/courses/${c.id}`} className={buttonVariants({ variant: "outline", size: "sm" })}>
             <Pencil /> Edit course
           </Link>

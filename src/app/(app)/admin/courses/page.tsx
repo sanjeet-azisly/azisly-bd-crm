@@ -1,3 +1,4 @@
+import { requirePerm } from "@/lib/auth"
 import Link from "next/link"
 import { Plus } from "lucide-react"
 import { Chip } from "@/components/chip"
@@ -12,6 +13,7 @@ import { ActiveToggle } from "./active-toggle"
 export const metadata = { title: "Courses · Azisly BD CRM" }
 
 export default async function CoursesAdminPage() {
+  await requirePerm("courses")
   const supabase = await createClient()
   const { data } = await supabase
     .from("courses")

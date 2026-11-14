@@ -2,80 +2,26 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import {
-  BadgeCheck,
-  BookOpen,
-  Contact,
-  Crown,
-  Flag,
-  GraduationCap,
-  IdCard,
-  Home,
-  LayoutDashboard,
-  LayoutGrid,
-  Settings2,
-  SlidersHorizontal,
-  Trophy,
-  Users,
-  UsersRound,
-  Waves,
-} from "lucide-react"
+import { LayoutGrid, Settings2 } from "lucide-react"
+import { NAV_ITEMS, type NavItem, type NavViewer } from "@/lib/nav"
 import { cn } from "@/lib/utils"
-
-type NavItem = {
-  href: string
-  label: string
-  icon: React.ComponentType<{ className?: string }>
-  adminOnly?: boolean
-  leaderOnly?: boolean
-  /** Shown in the phone's bottom bar (the rest live on the Admin hub page). */
-  bottom?: boolean
-}
-
-// Grows phase by phase as screens are added.
-const ITEMS: NavItem[] = [
-  { href: "/today", label: "Today", icon: Home, bottom: true },
-  { href: "/leads", label: "Leads", icon: Contact, bottom: true },
-  { href: "/courses", label: "Courses", icon: GraduationCap, bottom: true },
-  { href: "/leaderboard", label: "Ranks", icon: Trophy, bottom: true },
-  { href: "/pod", label: "My pod", icon: Crown, leaderOnly: true, bottom: true },
-  { href: "/pool", label: "Pool", icon: Waves },
-  { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard, adminOnly: true },
-  { href: "/admin/verify", label: "Verify", icon: BadgeCheck, adminOnly: true, bottom: true },
-  { href: "/admin/flags", label: "Flagged leads", icon: Flag, adminOnly: true },
-  { href: "/pod", label: "Pod view", icon: Crown, adminOnly: true },
-  { href: "/admin/team", label: "Team", icon: Users, adminOnly: true },
-  { href: "/admin/photos", label: "ID photos", icon: IdCard, adminOnly: true },
-  { href: "/admin/pods", label: "Pods", icon: UsersRound, adminOnly: true },
-  { href: "/admin/courses", label: "Course setup", icon: BookOpen, adminOnly: true },
-  { href: "/admin/settings", label: "Settings", icon: SlidersHorizontal, adminOnly: true },
-]
-
-const ADMIN_HUB: NavItem = { href: "/admin", label: "Admin", icon: LayoutGrid, adminOnly: true, bottom: true }
 
 function isActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`)
 }
 
-type NavProps = { isAdmin: boolean; isLeader: boolean; inPod: boolean; pendingCount: number; flaggedCount?: number }
+type Counts = { pendingCount: number; flaggedCount?: number }
 
-function visible(i: NavItem, { isAdmin, isLeader, inPod }: Pick<NavProps, "isAdmin" | "isLeader" | "inPod">) {
-  if (i.adminOnly) return isAdmin
-  if (i.leaderOnly) return isLeader && !isAdmin
-  if (i.href === "/pool") return inPod || isAdmin
-  return true
-}
-
-export function SideNav({ isAdmin, isLeader, inPod, pendingCount, flaggedCount = 0 }: NavProps) {
+export function SideNav({ viewer, pendingCount, flaggedCount = 0 }: { viewer: NavViewer } & Counts) {
   const pathname = usePathname()
-  const items = ITEMS.filter((i) => visible(i, { isAdmin, isLeader, inPod }))
+  const items = NAV_ITEMS.filter((i) => i.show(viewer))
   return (
     <nav className="space-y-0.5" aria-label="Main">
-      {items.map(({ href, label, icon: Icon, adminOnly }, idx) => (
-        <div key={href}>
-          {adminOnly && !items[idx - 1]?.adminOnly && (
+      {items.map(({ href, label, icon: Icon, manage }, idx) => (
+        <div key={`${href}-${label}`}>
+          {manage && !items[idx - 1]?.manage && (
             <p className="mt-8 mb-2 flex items-center gap-1.5 px-4 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-              <Settings2 className="size-3" /> Admin
+              <Settings2 className="size-3" /> {viewer.isAdmin ? "Admin" : "Manage"}
             </p>
           )}
           <Link
@@ -99,13 +45,23 @@ export function SideNav({ isAdmin, isLeader, inPod, pendingCount, flaggedCount =
   )
 }
 
-export function BottomNav({ isAdmin, isLeader, inPod, pendingCount }: NavProps) {
+/** Phone bar: at most 5 items. Everything else lives on the Admin / Manage hub page. */
+function bottomItems(v: NavViewer): NavItem[] {
+  const byHref = (h: string) => NAV_ITEMS.find((i) => i.href === h)!
+  const hasHub = NAV_ITEMS.some((i) => i.manage && i.show(v))
+  const hub: NavItem = { href: "/admin", label: v.isAdmin ? "Admin" : "Manage", icon: LayoutGrid, show: () => true }
+  if (v.isAdmin) return [byHref("/today"), byHref("/leads"), byHref("/leaderboard"), byHref("/admin/verify"), hub]
+  const list = [byHref("/today"), byHref("/leads")]
+  list.push(v.leadsPod ? byHref("/leaderboard") : byHref("/courses"))
+  list.push(v.leadsPod ? byHref("/pod") : byHref("/leaderboard"))
+  list.push(hasHub ? hub : byHref("/earnings"))
+  return list
+}
+
+export function BottomNav({ viewer, pendingCount }: { viewer: NavViewer } & Counts) {
   const pathname = usePathname()
-  // Admins have more screens: on their phone bar Courses moves to the Admin hub, keeping 5 items.
-  const items = [...ITEMS, ADMIN_HUB].filter(
-    (i) => i.bottom && visible(i, { isAdmin, isLeader, inPod }) && !(isAdmin && i.href === "/courses")
-  )
-  // The Admin hub is "active" on any admin page that isn't in the bar itself.
+  const items = bottomItems(viewer)
+  // The hub is "active" on any admin page that isn't in the bar itself.
   const hubActive = pathname.startsWith("/admin") && !items.some((i) => i.href !== "/admin" && isActive(pathname, i.href))
   return (
     <nav

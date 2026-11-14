@@ -20,6 +20,8 @@ export type QueueRow = {
   paid_on: string
   txn_ref: string
   status: "Pending" | "Verified" | "Rejected" | "Refunded"
+  /** The viewer's own payment: someone else must verify it. */
+  own?: boolean
   reason: string | null
   logged_at: string
   lead_id: string
@@ -32,7 +34,15 @@ export type QueueRow = {
 
 const TONE = { Pending: "amber", Verified: "green", Rejected: "red", Refunded: "grey" } as const
 
-export function VerifyList({ rows, tab }: { rows: QueueRow[]; tab: "pending" | "verified" | "closed" }) {
+export function VerifyList({
+  rows,
+  tab,
+  canRefund = true,
+}: {
+  rows: QueueRow[]
+  tab: "pending" | "verified" | "closed"
+  canRefund?: boolean
+}) {
   const router = useRouter()
   const [busy, setBusy] = useState<string | null>(null)
   const [asking, setAsking] = useState<{ row: QueueRow; kind: "reject" | "refund" } | null>(null)
@@ -92,7 +102,10 @@ export function VerifyList({ rows, tab }: { rows: QueueRow[]; tab: "pending" | "
                 )}
               </div>
             </div>
-            {tab === "pending" && (
+            {tab === "pending" && r.own && (
+              <p className="mt-3 border-t pt-3 text-sm text-muted-foreground">Your own payment – an admin verifies it.</p>
+            )}
+            {tab === "pending" && !r.own && (
               <div className="mt-3 flex gap-2 border-t pt-3">
                 <Button className="flex-1 bg-[#16a34a] text-white hover:bg-[#15803d]" disabled={busy === r.id} onClick={() => verify(r)}>
                   <Check /> Verify
@@ -102,7 +115,7 @@ export function VerifyList({ rows, tab }: { rows: QueueRow[]; tab: "pending" | "
                 </Button>
               </div>
             )}
-            {tab === "verified" && (
+            {tab === "verified" && canRefund && (
               <div className="mt-3 flex justify-end border-t pt-3">
                 <Button variant="outline" size="sm" onClick={() => setAsking({ row: r, kind: "refund" })}>
                   Mark refunded

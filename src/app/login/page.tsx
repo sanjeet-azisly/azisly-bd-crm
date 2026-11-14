@@ -27,7 +27,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
       .eq("active", true)
       .order("role")
       .order("full_name")
-    devPeople = (data ?? []).map((p) => ({ email: p.email, label: `${p.full_name} (${p.role === "admin" ? "Admin" : "Intern"})` }))
+    devPeople = (data ?? []).map((p) => ({ email: p.email, label: `${p.full_name} (${p.role === "admin" ? "Admin" : p.role === "manager" ? "Manager" : "Intern"})` }))
   }
 
   return (
@@ -39,7 +39,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
       <div className="flex flex-1 justify-center px-4 pt-4 pb-10">
         <div className="w-full max-w-sm">
           <h1 className="text-center text-3xl font-semibold">Log in</h1>
-          <p className="mt-2 mb-8 text-center text-sm text-muted-foreground">Use the email your program admin invited.</p>
+          <p className="mt-2 mb-8 text-center text-sm text-muted-foreground">Use the email and password you set from your joining link.</p>
           {error && ERRORS[error] && (
             <p role="alert" className="mb-5 rounded-xl bg-[#fdecea] px-4 py-3 text-sm text-[#b42318]">
               {ERRORS[error]}

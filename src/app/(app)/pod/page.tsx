@@ -18,7 +18,7 @@ export const metadata = { title: "My pod · Azisly BD CRM" }
 const STATUS_TONE: Record<string, ChipTone> = { "Milestone hit": "green", "On track": "blue", Behind: "red" }
 const STUCK_DAYS = 5
 
-/** Spec 5.9: the pod leader's summary. Admins can look at any pod. */
+/** Spec 5.9: the pod manager's summary. Admins can look at any pod. */
 export default async function PodPage({ searchParams }: { searchParams: Promise<{ pod?: string }> }) {
   const me = await requireUser()
   const { pod: wanted } = await searchParams
@@ -44,8 +44,10 @@ export default async function PodPage({ searchParams }: { searchParams: Promise<
   const members = board.individuals.filter((i) => i.podId === pod.id)
   const podRank = board.pods.find((p) => p.id === pod.id)
   const target = pod.target_override !== null ? Number(pod.target_override) : month.milestone * members.length
-  const revenue = members.reduce((s, m) => s + m.revenue, 0)
-  const leader = members.find((m) => m.id === pod.leader_id)
+  // Includes the manager's own sales.
+  const revenue = podRank?.revenue ?? members.reduce((s, m) => s + m.revenue, 0)
+  const manager = data.managers.find((m) => m.id === pod.leader_id)
+  const leader = manager ? { id: manager.id, name: manager.full_name } : null
 
   const stuckBefore = new Date(Date.now() - STUCK_DAYS * 86_400_000).toISOString()
   const [{ data: leads }, { data: events }, { data: help }, { data: settings }, { data: pool }] = await Promise.all([
@@ -79,7 +81,7 @@ export default async function PodPage({ searchParams }: { searchParams: Promise<
     .filter((l) => (l.stage === "Demo done" || l.stage === "Payment pending") && l.stage_changed_at < stuckBefore)
     .sort((a, b) => a.stage_changed_at.localeCompare(b.stage_changed_at))
   const outreachTarget = settings?.target_outreach ?? 25
-  const ownerName = (id: string) => members.find((m) => m.id === id)?.name ?? "–"
+  const ownerName = (id: string) => members.find((m) => m.id === id)?.name ?? (leader?.id === id ? leader.name : "–")
 
   return (
     <>
@@ -100,7 +102,7 @@ export default async function PodPage({ searchParams }: { searchParams: Promise<
               <span className="size-3 rounded-full" style={{ background: pod.colour }} /> {pod.name}
             </p>
             <p className="flex items-center gap-1 text-sm text-muted-foreground">
-              <Crown className="size-3.5" /> {leader ? leader.name : "No leader marked"}
+              <Crown className="size-3.5" /> {leader ? leader.name : "No manager yet"}
             </p>
           </div>
           {podRank && (

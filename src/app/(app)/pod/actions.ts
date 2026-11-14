@@ -16,7 +16,7 @@ function refresh(leadId?: string) {
   if (leadId) revalidatePath(`/leads/${leadId}`)
 }
 
-/** Spec 5.4.7: ask your pod leader for help on a lead. */
+/** Spec 5.4.7: ask your manager for help on a lead. */
 export async function askForHelp(leadId: string, input: unknown): Promise<ActionResult> {
   const me = await requireUser()
   const parsed = z
@@ -40,7 +40,7 @@ async function setHelpStatus(id: string, status: "Taken" | "Handled"): Promise<A
   const supabase = await createClient()
   const { data, error } = await supabase.from("help_requests").update({ status }).eq("id", id).select("lead_id").maybeSingle()
   if (error) return { ok: false, error: error.message }
-  if (!data) return { ok: false, error: "Only the pod leader or an admin can do this." }
+  if (!data) return { ok: false, error: "Only the pod’s manager or an admin can do this." }
   refresh(data.lead_id)
   return { ok: true }
 }

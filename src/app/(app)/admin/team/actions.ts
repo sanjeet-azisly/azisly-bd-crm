@@ -2,54 +2,80 @@
 
 import { revalidatePath } from "next/cache"
 import { z } from "zod"
-import { requireAdmin } from "@/lib/auth"
-import { inviteBody } from "@/lib/email"
+import { requireAdmin, requirePerm, type CurrentUser } from "@/lib/auth"
 import { PHONE_ERROR, normalizePhone, type ActionResult } from "@/lib/format"
+import { createJoinLink, joinMessage } from "@/lib/join-links"
 import { createAdminClient } from "@/lib/supabase/admin"
-import { createClient } from "@/lib/supabase/server"
-import type { TeamRole } from "@/lib/types"
+import { DEFAULT_MANAGER_PERMISSIONS, PERMISSIONS, type Permission, type TeamRole } from "@/lib/types"
 
-const phoneField = z
-  .unknown()
-  .transform((v, ctx) => {
-    const p = normalizePhone(v)
-    if (p === "invalid") {
-      ctx.addIssue({ code: "custom", message: PHONE_ERROR })
-      return z.NEVER
-    }
-    return p
-  })
+const phoneField = z.unknown().transform((v, ctx) => {
+  const p = normalizePhone(v)
+  if (p === "invalid") {
+    ctx.addIssue({ code: "custom", message: PHONE_ERROR })
+    return z.NEVER
+  }
+  return p
+})
 
-const memberSchema = z.object({
-  full_name: z.string().trim().min(2, "Name must be 2–80 characters.").max(80, "Name must be 2–80 characters."),
+const nameField = z.string().trim().min(2, "Name must be 2–80 characters.").max(80, "Name must be 2–80 characters.")
+const emailField = z.string().trim().toLowerCase().pipe(z.email("Enter a valid email address."))
+const roleField = z.enum(["admin", "manager", "intern"])
+const permKeys = PERMISSIONS.map((p) => p.key) as [Permission, ...Permission[]]
+
+const inviteSchema = z.object({
+  full_name: nameField,
+  email: emailField,
   phone: phoneField,
-  role: z.enum(["admin", "leader", "intern"]),
+  role: roleField,
   pod_id: z.uuid().nullable(),
 })
 
-const emailField = z.string().trim().toLowerCase().pipe(z.email("Enter a valid email address."))
-
-const inviteSchema = memberSchema.extend({ email: emailField })
-
-const editSchema = memberSchema.extend({
+const editSchema = z.object({
   id: z.uuid(),
+  full_name: nameField,
+  phone: phoneField,
+  role: roleField,
+  pod_id: z.uuid().nullable(),
   referral_code: z
     .string()
     .trim()
     .regex(/^([A-Za-z0-9]{3,20})?$/, "Referral code: 3–20 letters or digits, no spaces.")
     .transform((c) => c || null),
+  permissions: z.array(z.enum(permKeys)).default([]),
+  commission_pct: z
+    .union([z.number(), z.string()])
+    .nullable()
+    .transform((v, ctx) => {
+      if (v === null || v === "") return null
+      const n = Number(v)
+      if (!Number.isFinite(n) || n < 0 || n > 100) {
+        ctx.addIssue({ code: "custom", message: "Share must be between 0 and 100%." })
+        return z.NEVER
+      }
+      return Math.round(n * 100) / 100
+    }),
 })
 
 const bulkRowSchema = z.object({
-  full_name: z.string().trim().min(2, "Name must be 2–80 characters.").max(80, "Name must be 2–80 characters."),
+  full_name: nameField,
   email: emailField,
   phone: phoneField,
-  role: z.enum(["admin", "leader", "intern"]),
+  role: roleField,
   pod_name: z.string().trim().max(40, "Pod name must be up to 40 characters.").transform((v) => v || null),
 })
 
 export type BulkRow = z.input<typeof bulkRowSchema>
-export type BulkRowResult = { email: string; status: "created" | "exists" | "error"; message?: string }
+export type BulkRowResult = {
+  email: string
+  name?: string
+  phone?: string | null
+  status: "created" | "exists" | "error"
+  message?: string
+  /** Joining link and WhatsApp message for people just added. */
+  link?: string
+  text?: string
+}
+export type JoinLinkResult = { link: string; text: string; phone: string | null; name: string }
 
 const POD_COLOURS = ["#2346F5", "#10B981", "#F59E0B", "#8B5CF6", "#EF4444", "#0EA5E9", "#EC4899"]
 
@@ -60,15 +86,35 @@ function firstError(e: z.ZodError) {
 function refresh() {
   revalidatePath("/admin/team")
   revalidatePath("/admin/pods")
+  revalidatePath("/pod")
 }
 
-/** Makes `userId` the leader of `podId`, or clears any pod they lead. */
-async function applyLeader(userId: string, role: TeamRole, podId: string | null) {
-  const supabase = await createClient()
+/**
+ * Who is managing the team. Admins manage everyone; a manager with
+ * "add and manage interns" manages the interns of the pod they run.
+ */
+async function teamActor(): Promise<{ me: CurrentUser; podId: string | null } | { error: string }> {
+  const me = await requirePerm("manage_team")
+  if (me.isAdmin) return { me, podId: null }
+  if (!me.ledPod) return { error: "You don’t run a pod yet. Ask the admin to set you as a pod’s manager." }
+  return { me, podId: me.ledPod.id }
+}
+
+/** May this actor change this person? Managers: only interns in their own pod. */
+async function canManage(actor: { me: CurrentUser; podId: string | null }, id: string) {
+  const { data } = await createAdminClient().from("profiles").select("id, role, pod_id").eq("id", id).maybeSingle()
+  if (!data) return null
+  if (actor.podId === null) return data
+  return data.role === "intern" && data.pod_id === actor.podId ? data : null
+}
+
+/** Makes `userId` the manager of `podId`, or clears any pod they run. */
+async function applyManager(userId: string, role: TeamRole, podId: string | null) {
+  const db = createAdminClient()
   const { error } =
-    role === "leader" && podId
-      ? await supabase.from("pods").update({ leader_id: userId }).eq("id", podId)
-      : await supabase.from("pods").update({ leader_id: null }).eq("leader_id", userId)
+    role === "manager" && podId
+      ? await db.from("pods").update({ leader_id: userId }).eq("id", podId)
+      : await db.from("pods").update({ leader_id: null }).eq("leader_id", userId)
   return error?.message ?? null
 }
 
@@ -80,8 +126,8 @@ async function createMember(
   m: { full_name: string; email: string; phone: string | null; role: TeamRole; pod_id: string | null },
   invitedBy: string
 ): Promise<{ id: string } | { error: string }> {
-  const admin = createAdminClient()
-  const { data: created, error: authError } = await admin.auth.admin.createUser({
+  const db = createAdminClient()
+  const { data: created, error: authError } = await db.auth.admin.createUser({
     email: m.email,
     email_confirm: true,
     user_metadata: { full_name: m.full_name },
@@ -93,28 +139,27 @@ async function createMember(
         : `Couldn’t create the login: ${authError?.message ?? "unknown error"}`,
     }
   }
-  const dbRole = m.role === "admin" ? "admin" : "intern"
-  const supabase = await createClient()
-  const { error: profileError } = await supabase.from("profiles").insert({
+  const { error: profileError } = await db.from("profiles").insert({
     id: created.user.id,
     email: m.email,
     full_name: m.full_name,
     phone: m.phone,
-    role: dbRole,
+    role: m.role,
     pod_id: m.pod_id,
+    permissions: m.role === "manager" ? DEFAULT_MANAGER_PERMISSIONS : [],
   })
   if (profileError) {
-    await admin.auth.admin.deleteUser(created.user.id)
+    await db.auth.admin.deleteUser(created.user.id)
     return { error: `Couldn’t save the team member: ${profileError.message}` }
   }
-  await supabase.from("invites").upsert(
+  await db.from("invites").upsert(
     {
       email: m.email,
       full_name: m.full_name,
       phone: m.phone,
-      role: dbRole,
+      role: m.role === "admin" ? "admin" : "intern",
       pod_id: m.pod_id,
-      make_leader: m.role === "leader",
+      make_leader: m.role === "manager",
       invited_by: invitedBy,
       accepted_at: null,
       link_sent_at: null,
@@ -124,45 +169,53 @@ async function createMember(
   return { id: created.user.id }
 }
 
-export async function inviteMember(input: unknown): Promise<ActionResult<{ inviteText: string }>> {
-  const me = await requireAdmin()
+async function linkFor(id: string, name: string, phone: string | null, returning = false): Promise<JoinLinkResult> {
+  const { link } = await createJoinLink(id)
+  return { link, text: joinMessage(name, link, returning), phone, name }
+}
+
+export async function inviteMember(input: unknown): Promise<ActionResult<JoinLinkResult>> {
+  const actor = await teamActor()
+  if ("error" in actor) return { ok: false, error: actor.error }
   const parsed = inviteSchema.safeParse(input)
   if (!parsed.success) return { ok: false, error: firstError(parsed.error) }
-  const m = parsed.data
-  if (m.role === "leader" && !m.pod_id) return { ok: false, error: "Pick the pod this person will lead." }
+  // Managers add interns to their own pod, whatever the form says.
+  const m = actor.podId ? { ...parsed.data, role: "intern" as const, pod_id: actor.podId } : parsed.data
+  if (m.role === "manager" && !m.pod_id) return { ok: false, error: "Pick the pod this manager will run." }
 
-  const supabase = await createClient()
-  const { data: existing } = await supabase.from("profiles").select("full_name").eq("email", m.email).maybeSingle()
+  const db = createAdminClient()
+  const { data: existing } = await db.from("profiles").select("full_name").eq("email", m.email).maybeSingle()
   if (existing) return { ok: false, error: `${m.email} is already on the team (${existing.full_name}).` }
 
-  const created = await createMember(m, me.profile.id)
+  const created = await createMember(m, actor.me.profile.id)
   if ("error" in created) return { ok: false, error: created.error }
-  const leaderError = await applyLeader(created.id, m.role, m.pod_id)
+  const managerError = await applyManager(created.id, m.role, m.pod_id)
 
   refresh()
   return {
     ok: true,
-    data: { inviteText: inviteBody(m.full_name) },
-    message: leaderError ? `Added, but couldn’t mark as pod leader: ${leaderError}` : undefined,
+    data: await linkFor(created.id, m.full_name, m.phone),
+    message: managerError ? `Added, but couldn’t make them the pod’s manager: ${managerError}` : undefined,
   }
 }
 
-/** Creates everyone in an uploaded sheet. Unknown pod names become new pods. */
+/** Creates everyone in an uploaded sheet. Admins: unknown pod names become new pods. */
 export async function bulkImport(rows: BulkRow[]): Promise<ActionResult<BulkRowResult[]>> {
-  const me = await requireAdmin()
+  const actor = await teamActor()
+  if ("error" in actor) return { ok: false, error: actor.error }
   if (!Array.isArray(rows) || rows.length === 0) return { ok: false, error: "The sheet has no rows." }
   if (rows.length > 300) return { ok: false, error: "Upload up to 300 people at a time." }
 
-  const supabase = await createClient()
+  const db = createAdminClient()
   const [{ data: profiles }, { data: pods }] = await Promise.all([
-    supabase.from("profiles").select("email"),
-    supabase.from("pods").select("id, name"),
+    db.from("profiles").select("email"),
+    db.from("pods").select("id, name"),
   ])
   const onTeam = new Set((profiles ?? []).map((p) => String(p.email).toLowerCase()))
   const podIds = new Map((pods ?? []).map((p) => [p.name.toLowerCase(), p.id as string]))
   const seen = new Set<string>()
   const results: BulkRowResult[] = []
-  const leaders: { id: string; podId: string }[] = []
+  const managers: { id: string; podId: string }[] = []
 
   for (const raw of rows) {
     const parsed = bulkRowSchema.safeParse(raw)
@@ -172,6 +225,10 @@ export async function bulkImport(rows: BulkRow[]): Promise<ActionResult<BulkRowR
       continue
     }
     const r = parsed.data
+    if (actor.podId && r.role !== "intern") {
+      results.push({ email: r.email, status: "error", message: "Only the admin can add managers or admins." })
+      continue
+    }
     if (seen.has(r.email)) {
       results.push({ email: r.email, status: "error", message: "This email appears twice in the sheet." })
       continue
@@ -182,11 +239,11 @@ export async function bulkImport(rows: BulkRow[]): Promise<ActionResult<BulkRowR
       continue
     }
 
-    let podId: string | null = null
-    if (r.pod_name) {
+    let podId: string | null = actor.podId
+    if (!actor.podId && r.pod_name) {
       podId = podIds.get(r.pod_name.toLowerCase()) ?? null
       if (!podId) {
-        const { data: pod, error } = await supabase
+        const { data: pod, error } = await db
           .from("pods")
           .insert({ name: r.pod_name, colour: POD_COLOURS[podIds.size % POD_COLOURS.length] })
           .select("id")
@@ -200,74 +257,111 @@ export async function bulkImport(rows: BulkRow[]): Promise<ActionResult<BulkRowR
       }
     }
 
-    const created = await createMember({ ...r, pod_id: podId }, me.profile.id)
+    const created = await createMember({ ...r, pod_id: podId }, actor.me.profile.id)
     if ("error" in created) {
       results.push({ email: r.email, status: "error", message: created.error })
       continue
     }
-    if (r.role === "leader" && podId) leaders.push({ id: created.id, podId })
+    if (r.role === "manager" && podId) managers.push({ id: created.id, podId })
+    const { link, text } = await linkFor(created.id, r.full_name, r.phone)
     results.push({
       email: r.email,
+      name: r.full_name,
+      phone: r.phone,
       status: "created",
-      message: r.role === "leader" && !podId ? "Added as intern – give them a pod, then mark them leader." : undefined,
+      link,
+      text,
+      message: r.role === "manager" && !podId ? "Added as manager without a pod – choose their pod in Pods." : undefined,
     })
   }
 
-  // Leaders last, once everyone is in their pod. A later row for the same pod wins.
-  for (const l of leaders) await applyLeader(l.id, "leader", l.podId)
+  // Managers last, once everyone is in their pod. A later row for the same pod wins.
+  for (const l of managers) await applyManager(l.id, "manager", l.podId)
 
   refresh()
   return { ok: true, data: results }
 }
 
-/** Records that login links went out, so the Team page can show it. */
+/** A fresh joining / new-password link for one person, to send on WhatsApp. */
+export async function getJoinLink(id: string): Promise<ActionResult<JoinLinkResult>> {
+  const actor = await teamActor()
+  if ("error" in actor) return { ok: false, error: actor.error }
+  if (!(await canManage(actor, id))) return { ok: false, error: "You can only send links to people in your pod." }
+  const { data: p } = await createAdminClient().from("profiles").select("full_name, phone, first_login_at").eq("id", id).single()
+  try {
+    const result = await linkFor(id, p!.full_name, p!.phone, !!p!.first_login_at)
+    revalidatePath("/admin/team")
+    return { ok: true, data: result }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Couldn’t create the link." }
+  }
+}
+
+/** Records that login links went out by email, so the Team page can show it. */
 export async function markLinksSent(emails: string[]): Promise<ActionResult> {
-  await requireAdmin()
+  await requirePerm("manage_team")
   const clean = emails.map((e) => String(e).trim().toLowerCase()).filter(Boolean)
   if (clean.length === 0) return { ok: true }
-  const supabase = await createClient()
-  const { error } = await supabase.from("invites").update({ link_sent_at: new Date().toISOString() }).in("email", clean)
+  const { error } = await createAdminClient().from("invites").update({ link_sent_at: new Date().toISOString() }).in("email", clean)
   if (error) return { ok: false, error: error.message }
   revalidatePath("/admin/team")
   return { ok: true }
 }
 
 export async function updateMember(input: unknown): Promise<ActionResult> {
-  const me = await requireAdmin()
+  const actor = await teamActor()
+  if ("error" in actor) return { ok: false, error: actor.error }
   const parsed = editSchema.safeParse(input)
   if (!parsed.success) return { ok: false, error: firstError(parsed.error) }
-  const { id, full_name, phone, role, pod_id, referral_code } = parsed.data
-  if (role === "leader" && !pod_id) return { ok: false, error: "A pod leader needs a pod." }
-  if (id === me.profile.id && role !== "admin") return { ok: false, error: "You can’t remove your own admin role." }
+  const { id, full_name, phone, role, pod_id, referral_code, permissions, commission_pct } = parsed.data
+  if (!(await canManage(actor, id))) return { ok: false, error: "You can only edit interns in your pod." }
 
-  const supabase = await createClient()
-  const { error } = await supabase
+  const db = createAdminClient()
+  if (actor.podId) {
+    // Managers change contact details only.
+    const { error } = await db.from("profiles").update({ full_name, phone }).eq("id", id)
+    if (error) return { ok: false, error: error.message }
+    refresh()
+    return { ok: true }
+  }
+
+  if (role === "manager" && !pod_id) return { ok: false, error: "A manager needs a pod to run." }
+  if (id === actor.me.profile.id && role !== "admin") return { ok: false, error: "You can’t remove your own admin role." }
+  const { error } = await db
     .from("profiles")
-    .update({ full_name, phone, role: role === "admin" ? "admin" : "intern", pod_id, referral_code })
+    .update({
+      full_name,
+      phone,
+      role,
+      pod_id,
+      referral_code,
+      permissions: role === "manager" ? permissions : [],
+      commission_pct: role === "manager" ? commission_pct : null,
+    })
     .eq("id", id)
   if (error) {
     if (error.code === "23505") return { ok: false, error: `Referral code “${referral_code}” is already taken.` }
     return { ok: false, error: error.message }
   }
-  const leaderError = await applyLeader(id, role, pod_id)
-  if (leaderError) return { ok: false, error: leaderError }
+  const managerError = await applyManager(id, role, pod_id)
+  if (managerError) return { ok: false, error: managerError }
 
   refresh()
   return { ok: true }
 }
 
 export async function setMemberActive(id: string, active: boolean): Promise<ActionResult> {
-  const me = await requireAdmin()
-  if (id === me.profile.id) return { ok: false, error: "You can’t deactivate yourself." }
+  const actor = await teamActor()
+  if ("error" in actor) return { ok: false, error: actor.error }
+  if (id === actor.me.profile.id) return { ok: false, error: "You can’t deactivate yourself." }
+  if (!(await canManage(actor, id))) return { ok: false, error: "You can only change interns in your pod." }
 
-  const supabase = await createClient()
-  const { error } = await supabase.from("profiles").update({ active }).eq("id", id)
+  const db = createAdminClient()
+  const { error } = await db.from("profiles").update({ active }).eq("id", id)
   if (error) return { ok: false, error: error.message }
 
   // Block the login itself too, so a deactivated person can't sign in at all.
-  const { error: banError } = await createAdminClient().auth.admin.updateUserById(id, {
-    ban_duration: active ? "none" : "876000h",
-  })
+  const { error: banError } = await db.auth.admin.updateUserById(id, { ban_duration: active ? "none" : "876000h" })
   if (banError) return { ok: false, error: `Saved, but couldn’t update the login: ${banError.message}` }
 
   refresh()
@@ -278,40 +372,17 @@ export async function deleteMember(id: string): Promise<ActionResult> {
   const me = await requireAdmin()
   if (id === me.profile.id) return { ok: false, error: "You can’t delete yourself." }
 
-  const supabase = await createClient()
-  const { data: profile } = await supabase.from("profiles").select("email").eq("id", id).maybeSingle()
-  const { error } = await createAdminClient().auth.admin.deleteUser(id)
+  const db = createAdminClient()
+  const { data: profile } = await db.from("profiles").select("email").eq("id", id).maybeSingle()
+  const { error } = await db.auth.admin.deleteUser(id)
   if (error) {
     return {
       ok: false,
-      error: /foreign key|violates/i.test(error.message)
-        ? "This person has leads or payments. Deactivate them instead."
-        : error.message,
+      error: /foreign key|violates/i.test(error.message) ? "This person has leads or payments. Deactivate them instead." : error.message,
     }
   }
-  if (profile) await supabase.from("invites").delete().eq("email", profile.email)
+  if (profile) await db.from("invites").delete().eq("email", profile.email)
 
   refresh()
   return { ok: true }
-}
-
-/**
- * A one-time login link for one team member, for the admin to open in a private
- * window (to see the CRM as that person) or send on WhatsApp while email isn't set up.
- * Works once and expires like any login link.
- */
-export async function getLoginLink(id: string, origin: string): Promise<ActionResult<{ link: string; email: string }>> {
-  await requireAdmin()
-  if (!/^https?:\/\/[^/]+$/.test(origin)) return { ok: false, error: "Couldn’t work out the site address." }
-  const supabase = await createClient()
-  const { data: profile } = await supabase.from("profiles").select("email, active").eq("id", id).maybeSingle()
-  if (!profile) return { ok: false, error: "Team member not found." }
-  if (!profile.active) return { ok: false, error: "This person is deactivated. Reactivate them first." }
-  const { data, error } = await createAdminClient().auth.admin.generateLink({
-    type: "magiclink",
-    email: profile.email,
-    options: { redirectTo: `${origin}/auth/confirm` },
-  })
-  if (error || !data.properties?.action_link) return { ok: false, error: error?.message ?? "Couldn’t create the link." }
-  return { ok: true, data: { link: data.properties.action_link, email: profile.email } }
 }

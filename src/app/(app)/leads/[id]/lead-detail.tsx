@@ -291,7 +291,7 @@ export function LeadDetail({
       {openHelp.map((h) => (
         <Banner key={h.id} tone="blue">
           <LifeBuoy className="size-4 shrink-0" />
-          {h.status === "Taken" ? `${h.helper ?? "Your pod leader"} is helping (${h.reason}).` : `Help requested: ${h.reason}. Waiting for ${helpGoesTo === "leader" ? "your pod leader" : "the admins"}.`}
+          {h.status === "Taken" ? `${h.helper ?? "Your manager"} is helping (${h.reason}).` : `Help requested: ${h.reason}. Waiting for ${helpGoesTo === "leader" ? "your manager" : "the admins"}.`}
         </Banner>
       ))}
       {open && lead.touches >= TOUCH_LIMIT && !hasLivePayment && (
@@ -764,7 +764,7 @@ function AskHelpDialog({
   goesTo: "leader" | "admins"
   onClose: () => void
 }) {
-  const who = goesTo === "leader" ? "your pod leader" : "the admins"
+  const who = goesTo === "leader" ? "your manager" : "the admins"
   const router = useRouter()
   const [reason, setReason] = useState<(typeof HELP_REASONS)[number] | "">("")
   const [note, setNote] = useState("")
@@ -776,7 +776,7 @@ function AskHelpDialog({
         <DialogHeader>
           <DialogTitle>Ask for help</DialogTitle>
           <DialogDescription>
-            {leadName} · {goesTo === "leader" ? "Your pod leader" : "The admins"} get notified.
+            {leadName} · {goesTo === "leader" ? "Your manager" : "The admins"} get notified.
           </DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="What do you need?">

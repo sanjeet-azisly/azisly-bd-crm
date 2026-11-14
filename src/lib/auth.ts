@@ -2,7 +2,7 @@ import "server-only"
 import { cache } from "react"
 import { redirect } from "next/navigation"
 import { createClient } from "@/lib/supabase/server"
-import type { Pod, Profile } from "@/lib/types"
+import type { Permission, Pod, Profile } from "@/lib/types"
 
 export const NOT_INVITED_MESSAGE =
   "This account isn’t on the Azisly BD team. Ask your program admin for an invite."
@@ -12,8 +12,11 @@ export const DEACTIVATED_MESSAGE =
 export type CurrentUser = {
   profile: Profile
   isAdmin: boolean
-  /** The pod this user leads, if they are its pod leader. */
+  isManager: boolean
+  /** The pod this user runs, if they are its manager. */
   ledPod: Pod | null
+  /** Admins can do everything; managers what the admin switched on. */
+  can: (p: Permission) => boolean
 }
 
 /** The signed-in team member for this request, or null. Cached per request. */
@@ -37,7 +40,10 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
       .maybeSingle<Pod>()
     ledPod = data
   }
-  return { profile, isAdmin: profile.role === "admin" && profile.active, ledPod }
+  const isAdmin = profile.role === "admin" && profile.active
+  const isManager = profile.role === "manager" && profile.active
+  const perms = new Set(profile.permissions ?? [])
+  return { profile, isAdmin, isManager, ledPod, can: (p) => isAdmin || (isManager && perms.has(p)) }
 })
 
 /** Use at the top of every signed-in page. Sends strangers back to login. */
@@ -56,6 +62,22 @@ export async function requireAdmin(): Promise<CurrentUser> {
   const me = await requireUser()
   if (!me.isAdmin) redirect("/today")
   return me
+}
+
+/** Admins, or managers the admin gave this power. */
+export async function requirePerm(p: Permission): Promise<CurrentUser> {
+  const me = await requireUser()
+  if (!me.can(p)) redirect("/today")
+  return me
+}
+
+/**
+ * The pod a manager's powers apply to: null for admins (everything).
+ * Managers without a pod get "none", which matches nothing.
+ */
+export function scopePod(me: CurrentUser): string | null {
+  if (me.isAdmin) return null
+  return me.ledPod?.id ?? "00000000-0000-0000-0000-000000000000"
 }
 
 /**

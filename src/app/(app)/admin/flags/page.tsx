@@ -1,3 +1,4 @@
+import { requirePerm } from "@/lib/auth"
 import Link from "next/link"
 import { Chip, type ChipTone } from "@/components/chip"
 import { PageHeader } from "@/components/page-header"
@@ -26,6 +27,7 @@ type Row = {
 
 /** Redundant leads: every attempt to add a number that's already in the CRM. */
 export default async function FlagsPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+  await requirePerm("flags")
   const { tab: raw } = await searchParams
   const tab = raw === "dismissed" ? "dismissed" : "open"
   const supabase = await createClient()
@@ -84,7 +86,7 @@ export default async function FlagsPage({ searchParams }: { searchParams: Promis
                         {r.lead.name}
                       </Link>
                     ) : (
-                      "a deleted lead"
+                      "a lead in another pod"
                     )}{" "}
                     {r.lead && <span className="text-muted-foreground">({r.lead.stage})</span>}
                   </p>
@@ -129,6 +131,8 @@ function relationOf(r: Row): { label: string; tone: ChipTone } {
     const sameOwner = r.referrer && r.lead?.owner?.full_name === r.referrer.full_name
     return sameOwner ? { label: "Own link", tone: "grey" } : { label: "Prospect re-submitted", tone: "blue" }
   }
+  // A manager can't see leads outside their pod: the clash is with another pod.
+  if (!r.lead && r.attempted_by) return { label: "Other pod", tone: "red" }
   if (!r.lead || !r.attempted_by) return { label: "Duplicate", tone: "grey" }
   if (r.attempted_by === r.lead.owner_id) return { label: "Own lead", tone: "grey" }
   if (r.attempter?.pod_id && r.attempter.pod_id === r.lead.pod_id) return { label: "Same pod", tone: "amber" }

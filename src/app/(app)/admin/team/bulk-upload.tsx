@@ -2,16 +2,15 @@
 
 import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { Download, FileSpreadsheet } from "lucide-react"
+import { Copy, Download, FileSpreadsheet } from "lucide-react"
 import { toast } from "sonner"
 import { Chip } from "@/components/chip"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { PHONE_ERROR, normalizePhone } from "@/lib/format"
 import { TEAM_ROLE_LABEL, type Pod, type TeamRole } from "@/lib/types"
 import { bulkImport, type BulkRowResult } from "./actions"
-import { describeOutcome, sendLinksTo } from "./send-links"
+import { WhatsAppButton } from "./share-link"
 
 type PreviewRow = {
   line: number
@@ -47,7 +46,7 @@ function parseRole(raw: string): TeamRole | null {
   const r = raw.trim().toLowerCase().replace(/[\s_-]+/g, " ")
   if (!r || r === "intern") return "intern"
   if (r === "admin") return "admin"
-  if (r === "pod leader" || r === "leader" || r === "team leader") return "leader"
+  if (["manager", "pod manager", "pod leader", "leader", "team leader"].includes(r)) return "manager"
   return null
 }
 
@@ -90,13 +89,24 @@ async function readRows(file: File): Promise<string[][]> {
   return data.map((r) => r.map((c) => (c === null || c === undefined ? "" : String(c))))
 }
 
-async function downloadTemplate() {
+async function downloadTemplate(isAdmin: boolean) {
   const { default: writeXlsxFile } = await import("write-excel-file/browser")
-  const header = ["Name", "Email", "Phone", "Role", "Pod"].map((value) => ({ value, fontWeight: "bold" as const }))
+  const bold = (value: string) => ({ value, fontWeight: "bold" as const })
+  if (!isAdmin) {
+    await writeXlsxFile(
+      [
+        ["Name", "Email", "Phone"].map(bold),
+        ["Arjun Mehta", "arjun@example.com", "9123456780"],
+        ["Meera Iyer", "meera@example.com", "9988776655"],
+      ],
+      { columns: [{ width: 22 }, { width: 30 }, { width: 14 }] }
+    ).toFile("azisly-interns-template.xlsx")
+    return
+  }
   await writeXlsxFile(
     [
-      header,
-      ["Riya Sharma", "riya@example.com", "9876543210", "Pod leader", "Pod Alpha"],
+      ["Name", "Email", "Phone", "Role", "Pod"].map(bold),
+      ["Riya Sharma", "riya@azisly.ai", "9876543210", "Manager", "Pod Alpha"],
       ["Arjun Mehta", "arjun@example.com", "9123456780", "Intern", "Pod Alpha"],
       ["Meera Iyer", "meera@example.com", "9988776655", "Intern", ""],
     ],
@@ -109,19 +119,21 @@ export function BulkUploadDialog({
   onOpenChange,
   existingEmails,
   pods,
+  isAdmin,
+  podName,
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
   existingEmails: Set<string>
   pods: Pod[]
+  isAdmin: boolean
+  podName?: string
 }) {
   const router = useRouter()
   const [fileName, setFileName] = useState<string | null>(null)
   const [rows, setRows] = useState<PreviewRow[]>([])
   const [readError, setReadError] = useState<string | null>(null)
-  const [sendLinks, setSendLinks] = useState(true)
-  const [stage, setStage] = useState<"pick" | "importing" | "sending" | "done">("pick")
-  const [progress, setProgress] = useState("")
+  const [stage, setStage] = useState<"pick" | "importing" | "done">("pick")
   const [results, setResults] = useState<BulkRowResult[] | null>(null)
   const [summary, setSummary] = useState<string | null>(null)
   const podNames = useMemo(() => new Set(pods.map((p) => p.name.toLowerCase())), [pods])
@@ -131,7 +143,6 @@ export function BulkUploadDialog({
     setRows([])
     setReadError(null)
     setStage("pick")
-    setProgress("")
     setResults(null)
     setSummary(null)
   }
@@ -170,8 +181,8 @@ export function BulkUploadDialog({
         full_name: get("full_name"),
         email: get("email").toLowerCase(),
         phone: get("phone"),
-        role: parseRole(get("role")),
-        pod_name: get("pod_name"),
+        role: isAdmin ? parseRole(get("role")) : (parseRole(get("role")) ?? "intern"),
+        pod_name: isAdmin ? get("pod_name") : (podName ?? ""),
         problem: null,
         skip: false,
         note: null,
@@ -180,14 +191,15 @@ export function BulkUploadDialog({
       if (row.full_name.length < 2 || row.full_name.length > 80) row.problem = "Name must be 2–80 characters."
       else if (!/^\S+@\S+\.\S+$/.test(row.email)) row.problem = "Missing or invalid email."
       else if (phone === "invalid") row.problem = PHONE_ERROR
-      else if (!row.role) row.problem = "Role must be Intern, Pod leader or Admin."
+      else if (!row.role) row.problem = "Role must be Intern, Manager or Admin."
+      else if (!isAdmin && row.role !== "intern") row.problem = "Only the admin can add managers or admins."
       else if (row.pod_name.length > 40) row.problem = "Pod name must be up to 40 characters."
       else if (seen.has(row.email)) row.problem = "This email appears twice in the sheet."
       else if (existingEmails.has(row.email)) {
         row.skip = true
         row.note = "Already on the team – will be skipped."
-      } else if (row.role === "leader" && !row.pod_name) row.note = "No pod – will be added as intern for now."
-      else if (row.pod_name && !podNames.has(row.pod_name.toLowerCase())) row.note = `New pod “${row.pod_name}” will be created.`
+      } else if (row.role === "manager" && !row.pod_name) row.note = "No pod – choose the pod they run later."
+      else if (isAdmin && row.pod_name && !podNames.has(row.pod_name.toLowerCase())) row.note = `New pod “${row.pod_name}” will be created.`
       if (typeof phone === "string" && phone !== "invalid") row.phone = phone
       seen.add(row.email)
       parsed.push(row)
@@ -211,19 +223,18 @@ export function BulkUploadDialog({
     }
     const out = res.data!
     setResults(out)
-    const created = out.filter((r) => r.status === "created").map((r) => r.email)
-    let text = `Added ${created.length} ${created.length === 1 ? "person" : "people"}.`
-    if (sendLinks && created.length) {
-      setStage("sending")
-      const outcome = await sendLinksTo(created, (done, total) => setProgress(`Sending login links ${done}/${total}…`))
-      text += ` ${describeOutcome(outcome, created.length)}`
-    }
-    setSummary(text)
+    const created = out.filter((r) => r.status === "created").length
+    setSummary(
+      created
+        ? `Added ${created} ${created === 1 ? "person" : "people"}. Send each their joining link on WhatsApp below – it works once and lasts 7 days.`
+        : "No one new was added."
+    )
     setStage("done")
     router.refresh()
   }
 
-  const busy = stage === "importing" || stage === "sending"
+  const busy = stage === "importing"
+  const created = (results ?? []).filter((r) => r.status === "created" && r.text)
 
   return (
     <Dialog
@@ -238,14 +249,48 @@ export function BulkUploadDialog({
         <DialogHeader>
           <DialogTitle>Upload a team sheet</DialogTitle>
           <DialogDescription>
-            Excel (.xlsx) or CSV with columns <strong>Name, Email, Phone, Role</strong> and optionally <strong>Pod</strong>.
-            Role is Intern, Pod leader or Admin (blank = Intern).
+            {isAdmin ? (
+              <>
+                Excel (.xlsx) or CSV with columns <strong>Name, Email, Phone, Role</strong> and optionally <strong>Pod</strong>.
+                Role is Intern, Manager or Admin (blank = Intern).
+              </>
+            ) : (
+              <>
+                Excel (.xlsx) or CSV with columns <strong>Name, Email, Phone</strong>. Everyone joins {podName ?? "your pod"} as an
+                intern.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
 
         {stage === "done" ? (
           <div className="space-y-3">
             <p className="rounded-lg bg-muted p-3 text-sm text-foreground">{summary}</p>
+            {created.length > 0 && (
+              <>
+                <ul className="max-h-72 divide-y overflow-y-auto rounded-xl border">
+                  {created.map((r) => (
+                    <li key={r.email} className="flex items-center justify-between gap-3 px-4 py-3">
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium">{r.name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{r.phone ? `+91 ${r.phone}` : r.email}</span>
+                      </span>
+                      <WhatsAppButton text={r.text!} phone={r.phone} size="sm" />
+                    </li>
+                  ))}
+                </ul>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    await navigator.clipboard.writeText(created.map((r) => `${r.name}: ${r.link}`).join("\n"))
+                    toast.success("All links copied")
+                  }}
+                >
+                  <Copy /> Copy all links
+                </Button>
+              </>
+            )}
             {results && results.some((r) => r.status !== "created" || r.message) && (
               <ul className="max-h-60 space-y-1 overflow-y-auto text-sm">
                 {results
@@ -272,7 +317,7 @@ export function BulkUploadDialog({
         ) : (
           <div className="space-y-6">
             <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" onClick={downloadTemplate}>
+              <Button type="button" variant="outline" onClick={() => downloadTemplate(isAdmin)}>
                 <Download /> Download template
               </Button>
               <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/80">
@@ -313,8 +358,8 @@ export function BulkUploadDialog({
                         <th className="p-2">Name</th>
                         <th className="p-2">Email</th>
                         <th className="p-2">Phone</th>
-                        <th className="p-2">Role</th>
-                        <th className="p-2">Pod</th>
+                        {isAdmin && <th className="p-2">Role</th>}
+                        {isAdmin && <th className="p-2">Pod</th>}
                         <th className="p-2">Check</th>
                       </tr>
                     </thead>
@@ -325,8 +370,8 @@ export function BulkUploadDialog({
                           <td className="p-2">{r.full_name}</td>
                           <td className="p-2">{r.email}</td>
                           <td className="p-2">{r.phone}</td>
-                          <td className="p-2">{r.role ? TEAM_ROLE_LABEL[r.role] : "?"}</td>
-                          <td className="p-2">{r.pod_name}</td>
+                          {isAdmin && <td className="p-2">{r.role ? TEAM_ROLE_LABEL[r.role] : "?"}</td>}
+                          {isAdmin && <td className="p-2">{r.pod_name}</td>}
                           <td className="p-2">
                             {r.problem ? (
                               <span className="text-red-700">{r.problem}</span>
@@ -339,20 +384,12 @@ export function BulkUploadDialog({
                     </tbody>
                   </table>
                 </div>
-                <label className="flex items-start gap-2 text-sm">
-                  <Checkbox checked={sendLinks} onCheckedChange={(v) => setSendLinks(v === true)} className="mt-0.5" />
-                  Email everyone their login link right after adding them
-                </label>
               </>
             )}
 
             <DialogFooter>
               <Button disabled={busy || ready.length === 0} onClick={runImport}>
-                {stage === "importing"
-                  ? "Adding people…"
-                  : stage === "sending"
-                    ? progress || "Sending login links…"
-                    : `Add ${ready.length || ""} ${ready.length === 1 ? "person" : "people"}`}
+                {stage === "importing" ? "Adding people…" : `Add ${ready.length || ""} ${ready.length === 1 ? "person" : "people"}`}
               </Button>
             </DialogFooter>
           </div>

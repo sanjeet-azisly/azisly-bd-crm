@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils"
 
 export function roleLabel(me: CurrentUser) {
   if (me.isAdmin) return "Admin"
-  if (me.ledPod) return "Pod leader"
+  if (me.isManager) return me.ledPod ? `Manager · ${me.ledPod.name}` : "Manager"
   return "Intern"
 }
 
@@ -23,7 +23,7 @@ export function UserMenu({ me, light = false, unread = 0 }: { me: CurrentUser; l
         className={cn("relative rounded-lg p-2", light ? "hover:bg-white/10" : "hover:bg-muted")}
       >
         <IdCard className="size-4" />
-        {!me.profile.photo_path && !me.isAdmin && (
+        {!me.profile.photo_path && me.profile.role === "intern" && (
           <span className="absolute top-1 right-1 size-2 rounded-full bg-[#f59e0b]" aria-hidden />
         )}
       </Link>

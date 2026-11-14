@@ -2,55 +2,52 @@
 
 import { useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { Copy, FileSpreadsheet, Link2, Mail, Pencil, Plus, Search, Send } from "lucide-react"
+import { FileSpreadsheet, Link2, Mail, Pencil, Plus, Search } from "lucide-react"
 import { toast } from "sonner"
 import { Chip } from "@/components/chip"
 import { ConfirmButton } from "@/components/confirm-button"
+import { PhoneInput } from "@/components/phone-input"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { NativeSelect } from "@/components/ui/native-select"
-import { PhoneInput } from "@/components/phone-input"
-import { TEAM_ROLE_LABEL, type Pod, type Profile, type TeamRole } from "@/lib/types"
+import { Switch } from "@/components/ui/switch"
 import { PHONE_ERROR, normalizePhone } from "@/lib/format"
-import { deleteMember, getLoginLink, inviteMember, setMemberActive, updateMember } from "./actions"
+import { PERMISSIONS, TEAM_ROLE_LABEL, type Permission, type Pod, type Profile, type TeamRole } from "@/lib/types"
+import { deleteMember, getJoinLink, inviteMember, setMemberActive, updateMember, type JoinLinkResult } from "./actions"
 import { BulkUploadDialog } from "./bulk-upload"
 import { describeOutcome, sendLinksTo } from "./send-links"
+import { ShareLinkDialog } from "./share-link"
 
-type Props = { meId: string; profiles: Profile[]; pods: Pod[]; linkSentAt: Record<string, string> }
+type Props = { meId: string; isAdmin: boolean; profiles: Profile[]; pods: Pod[]; linkSentAt: Record<string, string> }
 
-function teamRole(p: Profile, pods: Pod[]): TeamRole {
-  if (p.role === "admin") return "admin"
-  return pods.some((pod) => pod.leader_id === p.id) ? "leader" : "intern"
-}
+const ROLE_TONE = { admin: "violet", manager: "brand", intern: "grey" } as const
 
-export function TeamClient({ meId, profiles, pods, linkSentAt }: Props) {
-  const router = useRouter()
+export function TeamClient({ meId, isAdmin, profiles, pods, linkSentAt }: Props) {
   const [query, setQuery] = useState("")
+  const [onlyWaiting, setOnlyWaiting] = useState(false)
   const [inviteOpen, setInviteOpen] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
-  const [sending, setSending] = useState<string | null>(null)
   const [editing, setEditing] = useState<Profile | null>(null)
-  const [shareText, setShareText] = useState<{ name: string; email: string; text: string } | null>(null)
+  const [share, setShare] = useState<JoinLinkResult | null>(null)
+  const [linking, setLinking] = useState<string | null>(null)
   const podById = useMemo(() => new Map(pods.map((p) => [p.id, p])), [pods])
   const existingEmails = useMemo(() => new Set(profiles.map((p) => p.email.toLowerCase())), [profiles])
   const waiting = profiles.filter((p) => p.active && !p.first_login_at && p.id !== meId)
+  const managedPod = !isAdmin ? pods[0] : null
 
-  async function sendWaitingLinks() {
-    const emails = waiting.map((p) => p.email)
-    setSending(`Sending 0/${emails.length}…`)
-    const outcome = await sendLinksTo(emails, (done, total) => setSending(`Sending ${done}/${total}…`))
-    setSending(null)
-    const text = describeOutcome(outcome, emails.length)
-    if (outcome.stoppedByLimit || outcome.failed.length) toast.warning(text, { duration: 10000 })
-    else toast.success(text)
-    router.refresh()
+  async function openLink(p: Profile) {
+    setLinking(p.id)
+    const res = await getJoinLink(p.id)
+    setLinking(null)
+    if (!res.ok) return void toast.error(res.error)
+    setShare(res.data!)
   }
 
   const filtered = profiles.filter((p) => {
     const q = query.trim().toLowerCase()
+    if (onlyWaiting && !(p.active && !p.first_login_at && p.id !== meId)) return false
     return !q || p.full_name.toLowerCase().includes(q) || p.email.toLowerCase().includes(q)
   })
 
@@ -70,27 +67,19 @@ export function TeamClient({ meId, profiles, pods, linkSentAt }: Props) {
           <FileSpreadsheet /> Upload sheet
         </Button>
         <Button className="h-10" onClick={() => setInviteOpen(true)}>
-          <Plus /> Add person
+          <Plus /> {isAdmin ? "Add person" : "Add intern"}
         </Button>
       </div>
 
       {waiting.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#fdf1d6] px-5 py-4 text-sm text-[#8a5300]">
           <span>
-            {waiting.length} {waiting.length === 1 ? "person hasn’t" : "people haven’t"} logged in yet.
+            {waiting.length} {waiting.length === 1 ? "person hasn’t" : "people haven’t"} joined yet. Send each their joining
+            link on WhatsApp.
           </span>
-          <ConfirmButton
-            label={
-              <>
-                <Send /> {sending ?? "Send login links"}
-              </>
-            }
-            variant="default"
-            title={`Email login links to ${waiting.length} ${waiting.length === 1 ? "person" : "people"}?`}
-            description="Everyone who hasn’t logged in yet gets a fresh one-tap login link. Links expire after an hour; they can always ask for a new one on the login page."
-            confirmLabel="Send links"
-            onConfirm={sendWaitingLinks}
-          />
+          <Button variant="outline" size="sm" className="bg-white" onClick={() => setOnlyWaiting((v) => !v)}>
+            {onlyWaiting ? "Show everyone" : "Show them"}
+          </Button>
         </div>
       )}
 
@@ -101,7 +90,9 @@ export function TeamClient({ meId, profiles, pods, linkSentAt }: Props) {
       <ul className="divide-y rounded-2xl bg-surface">
         {filtered.map((p) => {
           const pod = p.pod_id ? podById.get(p.pod_id) : null
-          const role = teamRole(p, pods)
+          const runs = pods.find((x) => x.leader_id === p.id)
+          const sent = linkSentAt[p.email.toLowerCase()]
+          const editable = isAdmin || (p.role === "intern" && p.id !== meId)
           return (
             <li key={p.id} className="flex flex-wrap items-center gap-x-4 gap-y-3 px-6 py-5">
               <div className="min-w-0 flex-1 basis-56">
@@ -114,87 +105,88 @@ export function TeamClient({ meId, profiles, pods, linkSentAt }: Props) {
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
-                <Chip tone={role === "admin" ? "violet" : role === "leader" ? "brand" : "grey"}>{TEAM_ROLE_LABEL[role]}</Chip>
-                {pod && (
+                <Chip tone={ROLE_TONE[p.role]}>
+                  {TEAM_ROLE_LABEL[p.role]}
+                  {runs && ` · runs ${runs.name}`}
+                </Chip>
+                {pod && !runs && isAdmin && (
                   <Chip>
                     <span className="size-2 rounded-full" style={{ background: pod.colour }} />
                     {pod.name}
                   </Chip>
                 )}
-                {p.referral_code && <Chip tone="grey">Code: {p.referral_code}</Chip>}
                 {!p.active ? (
                   <Chip tone="red">Deactivated</Chip>
                 ) : p.first_login_at ? (
-                  <Chip tone="green">Active</Chip>
-                ) : linkSentAt[p.email.toLowerCase()] ? (
-                  <Chip tone="amber">
-                    Invited · link sent{" "}
-                    {new Date(linkSentAt[p.email.toLowerCase()]).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-                  </Chip>
+                  <Chip tone="green">Joined</Chip>
                 ) : (
-                  <Chip tone="amber">Invited · no link sent</Chip>
+                  <Chip tone="amber">
+                    {sent
+                      ? `Link sent ${new Date(sent).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`
+                      : "Not joined yet"}
+                  </Chip>
                 )}
               </div>
-              <Button variant="outline" size="sm" onClick={() => setEditing(p)}>
-                <Pencil /> Edit
-              </Button>
+              {editable && (
+                <div className="flex gap-1.5">
+                  {p.active && p.id !== meId && (
+                    <Button variant="outline" size="sm" disabled={linking === p.id} onClick={() => openLink(p)}>
+                      <Link2 /> {p.first_login_at ? "New password link" : "Joining link"}
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="sm" onClick={() => setEditing(p)}>
+                    <Pencil /> Edit
+                  </Button>
+                </div>
+              )}
             </li>
           )
         })}
-        {filtered.length === 0 && <li className="p-6 text-center text-sm text-muted-foreground">No one matches.</li>}
+        {filtered.length === 0 && (
+          <li className="p-6 text-center text-sm text-muted-foreground">
+            {profiles.length <= 1 ? "No one here yet. Add your first intern." : "No one matches."}
+          </li>
+        )}
       </ul>
 
       <InviteDialog
         open={inviteOpen}
         onOpenChange={setInviteOpen}
         pods={pods}
-        onInvited={async (name, email, text, sendNow) => {
+        isAdmin={isAdmin}
+        podName={managedPod?.name}
+        onInvited={(result) => {
           setInviteOpen(false)
-          router.refresh()
-          if (!sendNow) return void toast.success(`${name} added`)
-          const outcome = await sendLinksTo([email])
-          if (outcome.sent.length) toast.success(`${name} added and emailed a login link`)
-          else setShareText({ name, email, text })
-          router.refresh()
+          setShare(result)
         }}
       />
 
-      <BulkUploadDialog open={uploadOpen} onOpenChange={setUploadOpen} existingEmails={existingEmails} pods={pods} />
+      <BulkUploadDialog
+        open={uploadOpen}
+        onOpenChange={setUploadOpen}
+        existingEmails={existingEmails}
+        pods={pods}
+        isAdmin={isAdmin}
+        podName={managedPod?.name}
+      />
 
       {editing && (
         <EditDialog
           key={editing.id}
           profile={editing}
           isMe={editing.id === meId}
+          isAdmin={isAdmin}
           pods={pods}
-          initialRole={teamRole(editing, pods)}
           onClose={() => setEditing(null)}
+          onLink={() => {
+            const p = editing
+            setEditing(null)
+            openLink(p)
+          }}
         />
       )}
 
-      <Dialog open={!!shareText} onOpenChange={(o) => !o && setShareText(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Send the invite yourself</DialogTitle>
-            <DialogDescription>
-              {shareText?.name} is on the team, but the login email couldn’t be sent right now (usually the hourly email
-              limit). Copy this message and send it on WhatsApp to {shareText?.email} – they’ll get a link from the login page.
-            </DialogDescription>
-          </DialogHeader>
-          <p className="rounded-lg bg-muted p-3 text-sm">{shareText?.text}</p>
-          <DialogFooter>
-            <Button
-              onClick={async () => {
-                await navigator.clipboard.writeText(shareText?.text ?? "")
-                toast.success("Invite message copied")
-                setShareText(null)
-              }}
-            >
-              <Copy /> Copy message
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ShareLinkDialog share={share} onClose={() => setShare(null)} />
     </div>
   )
 }
@@ -220,14 +212,14 @@ function RoleAndPodFields({
         <Label htmlFor="role">Role</Label>
         <NativeSelect id="role" value={role} disabled={roleDisabled} onChange={(e) => setRole(e.target.value as TeamRole)}>
           <option value="intern">Intern</option>
-          <option value="leader">Pod leader</option>
+          <option value="manager">Manager</option>
           <option value="admin">Admin</option>
         </NativeSelect>
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor="pod">Pod</Label>
+        <Label htmlFor="pod">{role === "manager" ? "Pod they run" : "Pod"}</Label>
         <NativeSelect id="pod" value={podId} onChange={(e) => setPodId(e.target.value)}>
-          <option value="">No pod</option>
+          <option value="">{role === "manager" ? "Choose a pod" : "No pod"}</option>
           {pods.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -235,9 +227,9 @@ function RoleAndPodFields({
           ))}
         </NativeSelect>
       </div>
-      {role === "leader" && (
+      {role === "manager" && (
         <p className="text-xs text-muted-foreground sm:col-span-2">
-          Each pod has one leader. Marking this person replaces the pod’s current leader.
+          Managers are Azisly staff. Each pod has one manager – choosing this replaces the pod’s current manager.
         </p>
       )}
     </div>
@@ -248,17 +240,21 @@ function InviteDialog({
   open,
   onOpenChange,
   pods,
+  isAdmin,
+  podName,
   onInvited,
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
   pods: Pod[]
-  onInvited: (name: string, email: string, text: string, sendNow: boolean) => void
+  isAdmin: boolean
+  podName?: string
+  onInvited: (result: JoinLinkResult) => void
 }) {
+  const router = useRouter()
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [phone, setPhone] = useState("")
-  const [sendNow, setSendNow] = useState(true)
   const [role, setRole] = useState<TeamRole>("intern")
   const [podId, setPodId] = useState("")
   const [busy, setBusy] = useState(false)
@@ -273,7 +269,9 @@ function InviteDialog({
     setBusy(false)
     if (!res.ok) return setError(res.error)
     if (res.message) toast.warning(res.message)
-    onInvited(name.trim(), email.trim().toLowerCase(), res.data!.inviteText, sendNow)
+    toast.success(`${name.trim()} added`)
+    router.refresh()
+    onInvited(res.data!)
     setName("")
     setEmail("")
     setPhone("")
@@ -286,8 +284,8 @@ function InviteDialog({
       <DialogContent>
         <form onSubmit={submit} className="space-y-6" noValidate>
           <DialogHeader>
-            <DialogTitle>Add a person</DialogTitle>
-            <DialogDescription>Only invited emails can log in.</DialogDescription>
+            <DialogTitle>{isAdmin ? "Add a person" : `Add an intern to ${podName ?? "your pod"}`}</DialogTitle>
+            <DialogDescription>Next you’ll get their joining link to send on WhatsApp.</DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
             <Label htmlFor="inv-name">Name</Label>
@@ -298,17 +296,14 @@ function InviteDialog({
             <Input id="inv-email" type="email" inputMode="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="inv-phone">Phone</Label>
+            <Label htmlFor="inv-phone">WhatsApp number</Label>
             <PhoneInput id="inv-phone" value={phone} onChange={setPhone} />
           </div>
-          <RoleAndPodFields role={role} setRole={setRole} podId={podId} setPodId={setPodId} pods={pods} />
-          <label className="flex items-center gap-2 text-sm">
-            <Checkbox checked={sendNow} onCheckedChange={(v) => setSendNow(v === true)} /> Email them a login link now
-          </label>
+          {isAdmin && <RoleAndPodFields role={role} setRole={setRole} podId={podId} setPodId={setPodId} pods={pods} />}
           {error && <p className="text-sm text-destructive">{error}</p>}
           <DialogFooter>
             <Button type="submit" disabled={busy}>
-              {busy ? "Adding…" : "Add to team"}
+              {busy ? "Adding…" : "Add and get link"}
             </Button>
           </DialogFooter>
         </form>
@@ -320,22 +315,26 @@ function InviteDialog({
 function EditDialog({
   profile,
   isMe,
+  isAdmin,
   pods,
-  initialRole,
   onClose,
+  onLink,
 }: {
   profile: Profile
   isMe: boolean
+  isAdmin: boolean
   pods: Pod[]
-  initialRole: TeamRole
   onClose: () => void
+  onLink: () => void
 }) {
   const router = useRouter()
   const [name, setName] = useState(profile.full_name)
   const [phone, setPhone] = useState(profile.phone ?? "")
-  const [role, setRole] = useState<TeamRole>(initialRole)
+  const [role, setRole] = useState<TeamRole>(profile.role)
   const [podId, setPodId] = useState(profile.pod_id ?? "")
   const [code, setCode] = useState(profile.referral_code ?? "")
+  const [perms, setPerms] = useState<Permission[]>(profile.permissions ?? [])
+  const [share, setShareValue] = useState(profile.commission_pct === null ? "" : String(profile.commission_pct))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -351,6 +350,8 @@ function EditDialog({
       role,
       pod_id: podId || null,
       referral_code: code,
+      permissions: perms,
+      commission_pct: share,
     })
     setBusy(false)
     if (!res.ok) return setError(res.error)
@@ -383,28 +384,58 @@ function EditDialog({
             <Input id="ed-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="ed-phone">Phone</Label>
+            <Label htmlFor="ed-phone">WhatsApp number</Label>
             <PhoneInput id="ed-phone" value={phone} onChange={setPhone} />
           </div>
-          <RoleAndPodFields
-            role={role}
-            setRole={setRole}
-            podId={podId}
-            setPodId={setPodId}
-            pods={pods}
-            roleDisabled={isMe}
-          />
-          <div className="space-y-1.5">
-            <Label htmlFor="ed-code">Referral code</Label>
-            <Input
-              id="ed-code"
-              value={code}
-              placeholder="Created automatically on first login"
-              onChange={(e) => setCode(e.target.value.replace(/\s/g, ""))}
-              maxLength={20}
-            />
-            <p className="text-xs text-muted-foreground">Goes on their course page links. Must be unique.</p>
-          </div>
+          {isAdmin && (
+            <>
+              <RoleAndPodFields role={role} setRole={setRole} podId={podId} setPodId={setPodId} pods={pods} roleDisabled={isMe} />
+              {role === "manager" && (
+                <div className="space-y-4 rounded-xl bg-muted/50 p-4">
+                  <p className="text-sm font-medium">What this manager can do</p>
+                  <p className="-mt-3 text-xs text-muted-foreground">
+                    Always: see and help their pod’s leads, sell themselves, the pool and the leaderboard.
+                  </p>
+                  {PERMISSIONS.map((p) => (
+                    <label key={p.key} className="flex items-start justify-between gap-4">
+                      <span>
+                        <span className="block text-sm">{p.label}</span>
+                        <span className="block text-xs text-muted-foreground">{p.hint}</span>
+                      </span>
+                      <Switch
+                        checked={perms.includes(p.key)}
+                        onCheckedChange={(on) => setPerms((cur) => (on ? [...cur, p.key] : cur.filter((k) => k !== p.key)))}
+                        aria-label={p.label}
+                      />
+                    </label>
+                  ))}
+                  <div className="space-y-1.5 border-t pt-4">
+                    <Label htmlFor="ed-share">Share of pod’s verified revenue (%)</Label>
+                    <Input
+                      id="ed-share"
+                      inputMode="decimal"
+                      value={share}
+                      placeholder="e.g. 5"
+                      onChange={(e) => setShareValue(e.target.value.replace(/[^0-9.]/g, ""))}
+                      className="w-32"
+                    />
+                    <p className="text-xs text-muted-foreground">Used in their earnings calculator. Leave empty if none.</p>
+                  </div>
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <Label htmlFor="ed-code">Referral code</Label>
+                <Input
+                  id="ed-code"
+                  value={code}
+                  placeholder="Created automatically on first login"
+                  onChange={(e) => setCode(e.target.value.replace(/\s/g, ""))}
+                  maxLength={20}
+                />
+                <p className="text-xs text-muted-foreground">Goes on their course page links. Must be unique.</p>
+              </div>
+            </>
+          )}
           {error && <p className="text-sm text-destructive">{error}</p>}
           <DialogFooter>
             <Button type="submit" disabled={busy}>
@@ -418,41 +449,29 @@ function EditDialog({
             <p className="text-xs font-medium text-muted-foreground uppercase">Access</p>
             <div className="flex flex-wrap gap-2">
               {profile.active && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={async () => {
-                    const res = await getLoginLink(profile.id, window.location.origin)
-                    if (!res.ok) return void toast.error(res.error)
-                    await navigator.clipboard.writeText(res.data!.link)
-                    toast.success("Login link copied", {
-                      description: "Open it in a private window to see the CRM as this person, or send it on WhatsApp. Works once, expires in 1 hour.",
-                      duration: 8000,
-                    })
-                  }}
-                >
-                  <Link2 /> Copy login link
+                <Button variant="outline" size="sm" onClick={onLink}>
+                  <Link2 /> {profile.first_login_at ? "New password link" : "Joining link"}
                 </Button>
               )}
-              {profile.active && (
+              {profile.active && isAdmin && (
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={async () => {
                     const outcome = await sendLinksTo([profile.email])
-                    if (outcome.sent.length) toast.success(`Login link sent to ${profile.email}`)
+                    if (outcome.sent.length) toast.success(`Login link emailed to ${profile.email}`)
                     else toast.error(describeOutcome(outcome, 1))
                     router.refresh()
                   }}
                 >
-                  <Mail /> Send login link
+                  <Mail /> Email a login link
                 </Button>
               )}
               {profile.active ? (
                 <ConfirmButton
                   label="Deactivate"
                   title={`Deactivate ${profile.full_name}?`}
-                  description="They won’t be able to log in. You can turn them back on later."
+                  description="They won’t be able to log in, and their open leads go to the pod’s pool. You can turn them back on later."
                   confirmLabel="Deactivate"
                   destructive
                   onConfirm={() => run(() => setMemberActive(profile.id, false), "Deactivated")}
@@ -462,15 +481,17 @@ function EditDialog({
                   Reactivate
                 </Button>
               )}
-              <ConfirmButton
-                label="Delete"
-                variant="destructive"
-                title={`Delete ${profile.full_name} for good?`}
-                description="Use this for test or sample accounts. People with leads or payments can only be deactivated."
-                confirmLabel="Delete"
-                destructive
-                onConfirm={() => run(() => deleteMember(profile.id), "Deleted")}
-              />
+              {isAdmin && (
+                <ConfirmButton
+                  label="Delete"
+                  variant="destructive"
+                  title={`Delete ${profile.full_name} for good?`}
+                  description="Use this for test or sample accounts. People with leads or payments can only be deactivated."
+                  confirmLabel="Delete"
+                  destructive
+                  onConfirm={() => run(() => deleteMember(profile.id), "Deleted")}
+                />
+              )}
             </div>
           </div>
         )}
@@ -478,3 +499,4 @@ function EditDialog({
     </Dialog>
   )
 }
+

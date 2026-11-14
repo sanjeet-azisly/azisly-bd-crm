@@ -80,6 +80,7 @@ function PodCard({
   const router = useRouter()
   const [adding, setAdding] = useState("")
   const leader = members.find((m) => m.id === pod.leader_id)
+  const interns = members.filter((m) => m.role === "intern").length
   const podName = (id: string | null) => pods.find((p) => p.id === id)?.name
 
   async function run(fn: () => Promise<{ ok: boolean; error?: string }>, success: string) {
@@ -97,14 +98,14 @@ function PodCard({
           <div>
             <h2 className="text-lg font-semibold">{pod.name}</h2>
             <p className="text-sm text-muted-foreground">
-              Leader: {leader ? leader.full_name : <span className="text-muted-foreground">not marked</span>} · {members.length}{" "}
-              {members.length === 1 ? "member" : "members"}
+              Manager: {leader ? leader.full_name : <span className="text-muted-foreground">none yet</span>} · {interns}{" "}
+              {interns === 1 ? "intern" : "interns"}
             </p>
             <p className="text-sm text-muted-foreground">
               Target:{" "}
               {pod.target_override !== null
                 ? `${formatINR(pod.target_override)} (set by admin)`
-                : `${formatINR(members.length * defaultMilestone)} (sum of members’ milestones)`}
+                : `${formatINR(interns * defaultMilestone)} (sum of interns’ milestones)`}
             </p>
           </div>
           <Button variant="outline" size="sm" onClick={onEdit}>
@@ -121,22 +122,25 @@ function PodCard({
                   {m.full_name}{" "}
                   {isLeader && (
                     <Chip tone="brand" className="ml-1">
-                      <Crown className="size-3" /> Leader
+                      <Crown className="size-3" /> Manager
                     </Chip>
                   )}
+                  {!isLeader && m.role === "manager" && <span className="text-xs text-muted-foreground">(manager)</span>}
                 </span>
                 {isLeader ? (
-                  <Button variant="ghost" size="xs" onClick={() => run(() => setPodLeader(pod.id, null), "Leader unmarked")}>
+                  <Button variant="ghost" size="xs" onClick={() => run(() => setPodLeader(pod.id, null), "Manager removed from this pod")}>
                     Unmark
                   </Button>
                 ) : (
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => run(() => setPodLeader(pod.id, m.id), `${m.full_name} is now the leader`)}
-                  >
-                    <Crown /> Make leader
-                  </Button>
+                  m.role === "manager" && (
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => run(() => setPodLeader(pod.id, m.id), `${m.full_name} now runs ${pod.name}`)}
+                    >
+                      <Crown /> Make pod’s manager
+                    </Button>
+                  )
                 )}
                 <Button
                   variant="ghost"
@@ -213,7 +217,7 @@ function PodDialog({ pod, onClose }: { pod: Pod | null; onClose: () => void }) {
         <form onSubmit={save} className="space-y-6" noValidate>
           <DialogHeader>
             <DialogTitle>{pod ? `Edit ${pod.name}` : "New pod"}</DialogTitle>
-            <DialogDescription>Members and the leader are managed on the pod card.</DialogDescription>
+            <DialogDescription>Members and the manager are set on the pod card.</DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
             <Label htmlFor="pod-name">Pod name</Label>

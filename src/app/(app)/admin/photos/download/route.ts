@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server"
 import { zipSync } from "fflate"
-import { getCurrentUser } from "@/lib/auth"
+import { getCurrentUser, scopePod } from "@/lib/auth"
 import { PHOTO_BUCKET, photoFileName } from "@/lib/id-photos"
 import { createAdminClient } from "@/lib/supabase/admin"
 
@@ -12,12 +12,14 @@ export const maxDuration = 60
  */
 export async function GET(req: NextRequest) {
   const me = await getCurrentUser()
-  if (!me?.isAdmin) return new NextResponse("Not allowed", { status: 403 })
+  if (!me?.profile.active || !me.can("manage_team")) return new NextResponse("Not allowed", { status: 403 })
+  const pod = scopePod(me)
 
   const db = createAdminClient()
   const id = req.nextUrl.searchParams.get("id")
   let query = db.from("profiles").select("id, full_name, photo_path").eq("active", true).eq("role", "intern").not("photo_path", "is", null).order("full_name")
   if (id) query = query.eq("id", id)
+  if (pod) query = query.eq("pod_id", pod)
   const { data: people } = await query
   if (!people?.length) return new NextResponse("No photos to download.", { status: 404 })
 

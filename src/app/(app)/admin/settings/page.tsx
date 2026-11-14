@@ -1,3 +1,4 @@
+import { requireAdmin } from "@/lib/auth"
 import { PageHeader } from "@/components/page-header"
 import { createClient } from "@/lib/supabase/server"
 import { SettingsForm, type SettingsValues } from "./settings-form"
@@ -5,6 +6,7 @@ import { SettingsForm, type SettingsValues } from "./settings-form"
 export const metadata = { title: "Settings · Azisly BD CRM" }
 
 export default async function SettingsPage() {
+  await requireAdmin()
   const supabase = await createClient()
   const { data: s } = await supabase.from("settings").select("*").eq("id", 1).single()
   const monthly = (s?.monthly_targets ?? {}) as Partial<Record<"M1" | "M2" | "M3", number | null>>

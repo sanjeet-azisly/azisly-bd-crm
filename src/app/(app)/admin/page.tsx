@@ -1,45 +1,34 @@
 import Link from "next/link"
-import {
-  BadgeCheck,
-  BookOpen,
-  ChevronRight,
-  Crown,
-  Flag,
-  GraduationCap,
-  IdCard,
-  LayoutDashboard,
-  SlidersHorizontal,
-  Trophy,
-  Users,
-  UsersRound,
-  Waves,
-} from "lucide-react"
+import { redirect } from "next/navigation"
+import { Calculator, ChevronRight, GraduationCap, Trophy, Waves } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
+import { requireUser } from "@/lib/auth"
+import { NAV_ITEMS, navViewer } from "@/lib/nav"
 
 export const metadata = { title: "Admin · Azisly BD CRM" }
 
-const LINKS = [
-  { href: "/admin/dashboard", label: "Dashboard", hint: "Revenue vs targets, funnel, CSV", icon: LayoutDashboard },
-  { href: "/admin/verify", label: "Verify payments", hint: "Pending payments, oldest first", icon: BadgeCheck },
-  { href: "/admin/flags", label: "Flagged leads", hint: "Attempts to add numbers already in the CRM", icon: Flag },
-  { href: "/pod", label: "Pod view", hint: "Any pod’s members, help queue, stuck deals", icon: Crown },
-  { href: "/pool", label: "Pool", hint: "Untouched leads across all pods", icon: Waves },
-  { href: "/leaderboard", label: "Leaderboard", hint: "Individuals and pods", icon: Trophy },
-  { href: "/admin/team", label: "Team", hint: "Invite, roles, pods, access", icon: Users },
-  { href: "/admin/photos", label: "ID photos", hint: "Passport photos for ID cards, download all", icon: IdCard },
-  { href: "/admin/pods", label: "Pods", hint: "Create pods, mark leaders", icon: UsersRound },
+// Screens that don't fit the phone bar.
+const EXTRA = [
   { href: "/courses", label: "Courses hub", hint: "What interns see, and your own course links", icon: GraduationCap },
-  { href: "/admin/courses", label: "Course setup", hint: "Prices, pitch, payment links", icon: BookOpen },
-  { href: "/admin/settings", label: "Settings", hint: "Dates, milestones, slabs, targets, pool", icon: SlidersHorizontal },
+  { href: "/leaderboard", label: "Leaderboard", hint: "Individuals and pods", icon: Trophy },
+  { href: "/pool", label: "Pool", hint: "Untouched leads you can claim", icon: Waves },
+  { href: "/earnings", label: "Earnings calculator", hint: "What sales would earn", icon: Calculator },
 ]
 
-export default function AdminHub() {
+export default async function AdminHub() {
+  const me = await requireUser()
+  const viewer = navViewer(me)
+  if (!NAV_ITEMS.some((i) => i.manage && i.show(viewer))) redirect("/today")
+  const links = [
+    ...NAV_ITEMS.filter((i) => i.manage && i.show(viewer)).map((i) => ({ href: i.href, label: i.label, hint: i.hint ?? "", icon: i.icon })),
+    ...EXTRA.filter((e) => e.href !== "/pool" || viewer.inPod || viewer.isAdmin),
+  ]
   return (
     <>
-      <PageHeader title="Admin" />
+      <PageHeader title={me.isAdmin ? "Admin" : "Manage"} />
       <ul className="divide-y rounded-2xl bg-surface">
-        {LINKS.map(({ href, label, hint, icon: Icon }) => (
-          <li key={href}>
+        {links.map(({ href, label, hint, icon: Icon }) => (
+          <li key={`${href}-${label}`}>
             <Link href={href} className="flex items-center gap-3 p-4 hover:bg-muted/50">
               <Icon className="size-5 text-brand" />
               <span className="flex-1">

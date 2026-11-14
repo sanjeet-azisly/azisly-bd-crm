@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache"
 import { z } from "zod"
-import { requireAdmin } from "@/lib/auth"
+import { requirePerm } from "@/lib/auth"
 import { RESERVED_SLUGS, type ActionResult } from "@/lib/format"
 import { createClient } from "@/lib/supabase/server"
 
@@ -44,7 +44,7 @@ const courseSchema = z.object({
 })
 
 export async function saveCourse(id: string | null, input: unknown): Promise<ActionResult<{ id: string }>> {
-  await requireAdmin()
+  await requirePerm("courses")
   const parsed = courseSchema.safeParse(input)
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0].message }
 
@@ -62,7 +62,7 @@ export async function saveCourse(id: string | null, input: unknown): Promise<Act
 }
 
 export async function setCourseActive(id: string, active: boolean): Promise<ActionResult> {
-  await requireAdmin()
+  await requirePerm("courses")
   const supabase = await createClient()
   const { error } = await supabase.from("courses").update({ active }).eq("id", id)
   if (error) return { ok: false, error: error.message }

@@ -52,7 +52,7 @@ export default async function TodayPage() {
       : Promise.resolve({ data: null }),
   ])
 
-  // Revenue meter + rank (interns, including pod leaders). Admins get the verification queue instead.
+  // Revenue meter + rank for interns; managers see their pod; admins the verification queue.
   let meter: React.ReactNode = null
   if (me.isAdmin) {
     const { data: pend } = await supabase.from("payments").select("amount").eq("status", "Pending")
@@ -74,6 +74,46 @@ export default async function TodayPage() {
           )}
         </span>
         <ChevronRight className="size-6 text-muted-foreground" />
+      </Link>
+    )
+  } else if (me.isManager) {
+    // Managers aren't ranked: they see their pod's month and their share.
+    const data = await loadLeaderboardData(supabase)
+    const month = monthFor(data.settings, today)
+    const board = buildLeaderboard(data, "month", today)
+    const podRow = me.ledPod ? board.pods.find((p) => p.id === me.ledPod!.id) : undefined
+    const interns = me.ledPod ? data.people.filter((p) => p.pod_id === me.ledPod!.id).length : 0
+    const target = me.ledPod?.target_override != null ? Number(me.ledPod.target_override) : month.milestone * interns
+    const revenue = podRow?.revenue ?? 0
+    const pctOf = me.profile.commission_pct === null ? null : Number(me.profile.commission_pct)
+    meter = (
+      <Link href={me.ledPod ? "/pod" : "/earnings"} className="block rounded-2xl bg-surface p-6 hover:bg-muted/50">
+        <span className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">
+            {me.ledPod ? `${me.ledPod.name} · verified revenue · ${month.key}` : "You don’t run a pod yet"}
+          </span>
+          <ChevronRight className="size-5 text-muted-foreground" />
+        </span>
+        <span className="font-heading block text-4xl font-semibold">{formatINR(revenue)}</span>
+        {target > 0 && (
+          <>
+            <span className="mt-3 block h-2 overflow-hidden rounded-full bg-black/[0.07]">
+              <span
+                className={cn("block h-full rounded-full", revenue >= target ? "bg-[#16a34a]" : "bg-brand")}
+                style={{ width: `${Math.min(100, Math.round((revenue / target) * 100))}%` }}
+              />
+            </span>
+            <span className="mt-2 block text-sm text-muted-foreground">
+              {revenue >= target ? "Pod target hit 🎉" : `${formatINR(target - revenue)} to the pod target of ${formatINR(target)}`}
+              {podRow && ` · #${podRow.rank} of ${board.pods.length} pods`}
+            </span>
+          </>
+        )}
+        {pctOf !== null && (
+          <span className="mt-4 block border-t pt-4 text-sm">
+            Your share ({pctOf}%): <strong>{formatINR(Math.round((revenue * pctOf) / 100))}</strong> so far
+          </span>
+        )}
       </Link>
     )
   } else {
@@ -128,7 +168,7 @@ export default async function TodayPage() {
         </div>
       </div>
 
-      {!me.isAdmin && !me.profile.photo_path && (
+      {me.profile.role === "intern" && !me.profile.photo_path && (
         <Link
           href="/profile"
           className="flex items-center justify-between rounded-xl bg-brand-soft px-5 py-4 text-sm text-brand"

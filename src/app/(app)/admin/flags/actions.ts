@@ -1,13 +1,13 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { requireAdmin } from "@/lib/auth"
+import { requirePerm } from "@/lib/auth"
 import type { ActionResult } from "@/lib/format"
 import { createClient } from "@/lib/supabase/server"
 
 /** Dismiss flags. Pass one id, or every open flag on a lead. */
 export async function dismissFlags(ids: string[]): Promise<ActionResult> {
-  const me = await requireAdmin()
+  const me = await requirePerm("flags")
   if (!ids.length) return { ok: true }
   const supabase = await createClient()
   const { error } = await supabase

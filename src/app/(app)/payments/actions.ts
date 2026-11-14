@@ -3,7 +3,7 @@
 import { randomUUID } from "node:crypto"
 import { revalidatePath } from "next/cache"
 import { z } from "zod"
-import { requireAdmin, requireUser } from "@/lib/auth"
+import { requireAdmin, requirePerm, requireUser } from "@/lib/auth"
 import type { ActionResult } from "@/lib/format"
 import { istDate } from "@/lib/leads"
 import { createAdminClient } from "@/lib/supabase/admin"
@@ -81,7 +81,9 @@ export async function logPayment(form: FormData): Promise<ActionResult> {
 const reasonSchema = z.string().trim().min(3, "Write a short reason.").max(500)
 
 async function changeStatus(id: string, status: "Verified" | "Rejected" | "Refunded", reason: string | null) {
-  await requireAdmin()
+  // Refunds are admin-only; managers with "approve payments" verify or reject their pod's.
+  if (status === "Refunded") await requireAdmin()
+  else await requirePerm("approve_payments")
   const supabase = await createClient()
   const { data, error } = await supabase
     .from("payments")
@@ -90,7 +92,7 @@ async function changeStatus(id: string, status: "Verified" | "Rejected" | "Refun
     .select("lead_id")
     .maybeSingle()
   if (error) return { ok: false as const, error: error.message }
-  if (!data) return { ok: false as const, error: "Payment not found." }
+  if (!data) return { ok: false as const, error: "You can’t change this payment (it may be your own, or already handled)." }
   refresh(data.lead_id)
   return { ok: true as const }
 }

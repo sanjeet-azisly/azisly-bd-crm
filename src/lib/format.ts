@@ -22,6 +22,7 @@ export function slugify(text: string): string {
 export const RESERVED_SLUGS = new Set([
   "login", "logout", "auth", "api", "today", "leads", "courses", "admin", "leaderboard", "leaderboards",
   "pod", "pods", "pool", "team", "settings", "dashboard", "payments", "help", "profile", "c",
+  "join", "earnings", "notifications", "reports",
 ])
 
 export type ActionResult<T = undefined> = { ok: true; data?: T; message?: string } | { ok: false; error: string }

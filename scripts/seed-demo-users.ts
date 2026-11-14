@@ -1,4 +1,4 @@
-// Demo accounts for trying each role: Demo Admin, Demo Pod Leader, Demo Intern (in "Demo Pod"),
+// Demo accounts for trying each role: Demo Admin, Demo Manager, Demo Intern (in "Demo Pod"),
 // with a few demo leads and one pending payment. Safe to run again.
 // Usage:  npm run db:demo            (create)
 //         npm run db:demo -- --remove (delete all demo data)
@@ -13,7 +13,7 @@ const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPAB
 const POD = { name: "Demo Pod", colour: "#8B5CF6" }
 const PEOPLE = [
   { key: "admin", email: "demo.admin@example.com", full_name: "Demo Admin", phone: "9123400001", role: "admin", inPod: false },
-  { key: "leader", email: "demo.leader@example.com", full_name: "Demo Pod Leader", phone: "9123400002", role: "intern", inPod: true },
+  { key: "leader", email: "demo.leader@example.com", full_name: "Demo Manager", phone: "9123400002", role: "manager", inPod: true },
   { key: "intern", email: "demo.intern@example.com", full_name: "Demo Intern", phone: "9123400003", role: "intern", inPod: true },
 ] as const
 
@@ -64,6 +64,8 @@ async function main() {
       phone: p.phone,
       role: p.role,
       pod_id: p.inPod ? pod.id : null,
+      permissions: p.role === "manager" ? ["manage_team", "export", "flags", "approve_payments"] : [],
+      commission_pct: p.role === "manager" ? 5 : null,
     })
     if (pErr) throw new Error(`${p.email}: ${pErr.message}`)
     await db.from("invites").upsert({ email: p.email, full_name: p.full_name, phone: p.phone, role: p.role, pod_id: p.inPod ? pod.id : null, make_leader: p.key === "leader" }, { onConflict: "email" })
@@ -99,7 +101,7 @@ async function main() {
       if (payErr) throw new Error(`payment: ${payErr.message}`)
     }
   }
-  console.log("Created: Demo Admin, Demo Pod Leader, Demo Intern (Demo Pod), 5 demo leads, 1 pending payment.")
+  console.log("Created: Demo Admin, Demo Manager, Demo Intern (Demo Pod), 5 demo leads, 1 pending payment.")
 }
 
 main().catch((e) => {

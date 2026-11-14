@@ -1,3 +1,4 @@
+import { requirePerm } from "@/lib/auth"
 import Link from "next/link"
 import { PageHeader } from "@/components/page-header"
 import { formatINR } from "@/lib/format"
@@ -15,6 +16,7 @@ const TABS = [
 ] as const
 
 export default async function VerifyPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
+  const me = await requirePerm("approve_payments")
   const { tab: raw } = await searchParams
   const tab = TABS.find((t) => t.key === raw)?.key ?? "pending"
   const supabase = await createClient()
@@ -22,7 +24,7 @@ export default async function VerifyPage({ searchParams }: { searchParams: Promi
   let query = supabase
     .from("payments")
     .select(
-      "id, amount, paid_on, txn_ref, status, reason, created_at, verified_at, screenshot_path, lead:leads(id, name, phone), owner:profiles!payments_owner_id_fkey(full_name), course:courses(short_name), assisted:profiles!payments_assisted_by_fkey(full_name)"
+      "id, owner_id, amount, paid_on, txn_ref, status, reason, created_at, verified_at, screenshot_path, lead:leads(id, name, phone), owner:profiles!payments_owner_id_fkey(full_name), course:courses(short_name), assisted:profiles!payments_assisted_by_fkey(full_name)"
     )
   query =
     tab === "pending"
@@ -40,6 +42,7 @@ export default async function VerifyPage({ searchParams }: { searchParams: Promi
     const lead = p.lead as unknown as { id: string; name: string; phone: string } | null
     return {
       id: p.id,
+      own: p.owner_id === me.profile.id,
       amount: Number(p.amount),
       paid_on: p.paid_on,
       txn_ref: p.txn_ref,
@@ -60,7 +63,11 @@ export default async function VerifyPage({ searchParams }: { searchParams: Promi
     <>
       <PageHeader
         title="Verify payments"
-        description="Check each payment against the official Azisly account before verifying. Only verified payments count."
+        description={
+          me.isAdmin
+            ? "Check each payment against the official Azisly account before verifying. Only verified payments count."
+            : `Payments from ${me.ledPod?.name ?? "your pod"}. Check each one against the official Azisly account before verifying.`
+        }
       />
       <nav className="mb-8 flex gap-1 rounded-full bg-surface p-1 text-sm" aria-label="Payment status">
         {TABS.map((t) => (
@@ -79,7 +86,7 @@ export default async function VerifyPage({ searchParams }: { searchParams: Promi
           {rows.length} waiting · {formatINR(total)} · oldest first
         </p>
       )}
-      <VerifyList rows={rows} tab={tab} />
+      <VerifyList rows={rows} tab={tab} canRefund={me.isAdmin} />
     </>
   )
 }

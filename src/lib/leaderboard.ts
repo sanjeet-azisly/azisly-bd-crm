@@ -46,6 +46,7 @@ export type Highlights = {
 }
 
 type Pay = { owner_id: string; amount: number; paid_on: string; lead_id: string }
+type Member = { id: string; full_name: string; pod_id: string | null; role: "intern" | "manager" }
 type LeadStat = { owner_id: string; created_on: string; won: boolean }
 
 /** Competition ranking: equal revenue shares a rank (1, 2, 2, 4). */
@@ -62,14 +63,16 @@ export async function loadLeaderboardData(supabase: SupabaseClient) {
   const [{ data: payments }, { data: leads }, { data: people }, { data: pods }, { data: settings }] = await Promise.all([
     supabase.rpc("leaderboard_payments"),
     supabase.rpc("leaderboard_leads"),
-    supabase.from("profiles").select("id, full_name, pod_id, role, active").eq("active", true).eq("role", "intern"),
+    supabase.from("profiles").select("id, full_name, pod_id, role, active").eq("active", true).in("role", ["intern", "manager"]),
     supabase.from("pods").select("id, name, colour").order("name"),
     supabase.from("settings").select(PROGRAM_SETTINGS_COLUMNS).eq("id", 1).single(),
   ])
   return {
     payments: ((payments ?? []) as Pay[]).map((p) => ({ ...p, amount: Number(p.amount) })),
     leads: (leads ?? []) as LeadStat[],
-    people: (people ?? []) as { id: string; full_name: string; pod_id: string | null }[],
+    // Interns are ranked; managers' own sales still count towards their pod.
+    people: ((people ?? []) as Member[]).filter((p) => p.role === "intern"),
+    managers: ((people ?? []) as Member[]).filter((p) => p.role === "manager"),
     pods: (pods ?? []) as { id: string; name: string; colour: string }[],
     settings: normalizeSettings(settings as Record<string, unknown>),
   }
@@ -78,7 +81,7 @@ export async function loadLeaderboardData(supabase: SupabaseClient) {
 export type LeaderboardData = Awaited<ReturnType<typeof loadLeaderboardData>>
 
 export function buildLeaderboard(data: LeaderboardData, period: Period, today = istDate()) {
-  const { payments, leads, people, pods, settings } = data
+  const { payments, leads, people, managers, pods, settings } = data
   const range = periodRange(settings, period, today)
   const podById = new Map(pods.map((p) => [p.id, p]))
   const showGap = period !== "all"
@@ -110,7 +113,9 @@ export function buildLeaderboard(data: LeaderboardData, period: Period, today = 
   const podRows = rankBy(
     pods.map((pod) => {
       const members = individuals.filter((i) => i.podId === pod.id)
-      const revenue = members.reduce((s, m) => s + m.revenue, 0)
+      const managerIds = new Set(managers.filter((m) => m.pod_id === pod.id).map((m) => m.id))
+      const managerPays = payments.filter((p) => managerIds.has(p.owner_id) && inRange(p.paid_on, range))
+      const revenue = members.reduce((s, m) => s + m.revenue, 0) + managerPays.reduce((s, p) => s + p.amount, 0)
       return {
         id: pod.id,
         name: pod.name,
@@ -118,7 +123,7 @@ export function buildLeaderboard(data: LeaderboardData, period: Period, today = 
         members: members.length,
         revenue,
         perMember: members.length ? Math.round(revenue / members.length) : 0,
-        deals: members.reduce((s, m) => s + m.deals, 0),
+        deals: members.reduce((s, m) => s + m.deals, 0) + new Set(managerPays.map((p) => p.lead_id)).size,
       }
     })
   ).sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name)) as PodRow[]

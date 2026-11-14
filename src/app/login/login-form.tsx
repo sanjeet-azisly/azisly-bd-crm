@@ -16,8 +16,9 @@ export function LoginForm() {
   const [sentTo, setSentTo] = useState<string | null>(null)
   const [cooldown, setCooldown] = useState(0)
   const [busy, setBusy] = useState(false)
-  // Password login (for accounts that have a password, e.g. demo accounts).
-  const [usePassword, setUsePassword] = useState(false)
+  // Email + password is the main way in (people set it from their joining link).
+  const [usePassword, setUsePassword] = useState(true)
+  const [forgot, setForgot] = useState(false)
   const [password, setPassword] = useState("")
   const [error, setError] = useState<string | null>(null)
 
@@ -87,7 +88,7 @@ export function LoginForm() {
       setBusy(false)
       setError(
         /not enabled|unsupported provider/i.test(error.message)
-          ? "Google login isn’t switched on yet. Use the email link for now."
+          ? "Google login isn’t switched on yet. Use your email and password."
           : error.message
       )
     }
@@ -95,14 +96,6 @@ export function LoginForm() {
 
   return (
     <div className="space-y-6">
-      <Button type="button" variant="outline" className="h-11 w-full bg-white text-base" onClick={google} disabled={busy}>
-        <GoogleIcon /> Continue with Google
-      </Button>
-
-      <div className="flex items-center gap-3 text-xs text-muted-foreground">
-        <span className="h-px flex-1 bg-border" /> or get a login link by email <span className="h-px flex-1 bg-border" />
-      </div>
-
       {usePassword ? (
         <form onSubmit={passwordLogin} className="space-y-3" noValidate>
           <div className="space-y-1.5">
@@ -133,14 +126,27 @@ export function LoginForm() {
           </Button>
           <button
             type="button"
-            className="w-full text-center text-sm text-brand hover:underline"
-            onClick={() => {
-              setUsePassword(false)
-              setError(null)
-            }}
+            className="w-full text-center text-sm text-muted-foreground hover:text-foreground"
+            onClick={() => setForgot((f) => !f)}
           >
-            Use an email link instead
+            Forgot your password, or never set one?
           </button>
+          {forgot && (
+            <p className="rounded-xl bg-brand-soft px-4 py-3 text-sm text-brand">
+              Ask your manager or admin to send you a new password link on WhatsApp. Or{" "}
+              <button
+                type="button"
+                className="font-medium underline underline-offset-2"
+                onClick={() => {
+                  setUsePassword(false)
+                  setError(null)
+                }}
+              >
+                get a login link by email
+              </button>
+              .
+            </p>
+          )}
         </form>
       ) : !sentTo ? (
         <form onSubmit={sendLink} className="space-y-3" noValidate>
@@ -204,6 +210,13 @@ export function LoginForm() {
           {error}
         </p>
       )}
+
+      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+        <span className="h-px flex-1 bg-border" /> or <span className="h-px flex-1 bg-border" />
+      </div>
+      <Button type="button" variant="outline" className="h-11 w-full bg-white text-base" onClick={google} disabled={busy}>
+        <GoogleIcon /> Continue with Google
+      </Button>
     </div>
   )
 }

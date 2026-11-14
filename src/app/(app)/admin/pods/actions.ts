@@ -55,7 +55,7 @@ export async function deletePod(id: string): Promise<ActionResult> {
   return { ok: true }
 }
 
-/** One leader per pod: setting a new one replaces the old one. Pass null to clear. */
+/** One manager per pod: setting a new one replaces the old one. Pass null to clear. */
 export async function setPodLeader(podId: string, profileId: string | null): Promise<ActionResult> {
   await requireAdmin()
   const supabase = await createClient()

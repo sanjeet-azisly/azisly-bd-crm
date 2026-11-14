@@ -2,9 +2,9 @@ import Link from "next/link"
 import { Camera, Download } from "lucide-react"
 import { Chip } from "@/components/chip"
 import { PageHeader } from "@/components/page-header"
-import { requireAdmin } from "@/lib/auth"
+import { requirePerm, scopePod } from "@/lib/auth"
 import { photoLinks } from "@/lib/id-photos"
-import { createClient } from "@/lib/supabase/server"
+import { createAdminClient } from "@/lib/supabase/admin"
 import { cn } from "@/lib/utils"
 import { RequestNewPhoto } from "./request-new-photo"
 
@@ -25,17 +25,19 @@ const TABS = [
 ] as const
 
 export default async function PhotosPage({ searchParams }: { searchParams: Promise<{ show?: string }> }) {
-  await requireAdmin()
+  const me = await requirePerm("manage_team")
+  const pod = scopePod(me)
   const { show: raw } = await searchParams
   const show = TABS.some((t) => t.key === raw) ? raw! : "all"
 
-  const supabase = await createClient()
-  const { data } = await supabase
+  let query = createAdminClient()
     .from("profiles")
     .select("id, full_name, photo_path, photo_updated_at, pod:pods!profiles_pod_id_fkey(name, colour)")
     .eq("active", true)
     .eq("role", "intern")
     .order("full_name")
+  if (pod) query = query.eq("pod_id", pod)
+  const { data } = await query
   const everyone = (data ?? []) as unknown as Person[]
   const uploaded = everyone.filter((p) => p.photo_path).length
   const people = everyone.filter((p) => (show === "missing" ? !p.photo_path : show === "uploaded" ? !!p.photo_path : true))

@@ -49,7 +49,7 @@ export default async function CoursesHub() {
                 <span className="text-xs text-muted-foreground">Pitch, objections & your link</span>
               )}
               <span className="flex items-center gap-2">
-                {me.isAdmin && (
+                {me.can("courses") && (
                   <Link
                     href={`/admin/courses/${c.id}`}
                     className={buttonVariants({ variant: "outline", size: "sm", className: "relative z-10" })}

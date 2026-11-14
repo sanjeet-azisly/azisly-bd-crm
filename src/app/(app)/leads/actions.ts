@@ -59,7 +59,7 @@ async function duplicateMessage(phone: string) {
   const hit = (data as { lead_id: string | null; owner_name: string; stage: string }[] | null)?.[0]
   if (!hit) return null
   return {
-    message: `This number is already with ${hit.owner_name} (${hit.stage}). Ask your pod leader before working it.`,
+    message: `This number is already with ${hit.owner_name} (${hit.stage}). Ask your manager before working it.`,
     leadId: hit.lead_id,
   }
 }

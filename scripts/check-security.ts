@@ -43,6 +43,8 @@ async function run() {
   check("Intern cannot change their referral code", !!codeErr)
   const { error: photoErr } = await intern.from("profiles").update({ photo_path: `${meera!.id}/x.jpg` }).eq("id", arjun!.id)
   check("Intern cannot point their ID photo at someone else's file", !!photoErr)
+  const { error: permErr } = await intern.from("profiles").update({ permissions: ["approve_payments"] }).eq("id", arjun!.id)
+  check("Intern cannot give themselves manager powers", !!permErr)
   const { data: photoFiles } = await intern.storage.from("id-photos").list(meera!.id)
   check("Intern cannot browse ID photos directly", (photoFiles?.length ?? 0) === 0)
   const { data: otherUpd } = await intern.from("profiles").update({ full_name: "Changed" }).eq("id", meera!.id).select()
@@ -71,7 +73,9 @@ async function run() {
   const { data: adminInv } = await admin.from("invites").select("id")
   check("Admin can read invites", (adminInv?.length ?? 0) >= 4)
   const { error: leaderErr } = await admin.from("pods").update({ leader_id: meera!.id }).eq("id", arjun!.pod_id!)
-  check("A pod leader must be a member of that pod", !!leaderErr)
+  check("A pod's manager must be a member of that pod", !!leaderErr)
+  const { error: internLeadErr } = await admin.from("pods").update({ leader_id: arjun!.id }).eq("id", arjun!.pod_id!)
+  check("Only a manager can run a pod (not an intern)", !!internLeadErr)
 
   // Only invited emails
   const { error: otpErr } = await anon.auth.signInWithOtp({
@@ -177,6 +181,7 @@ async function run() {
 
   await paymentChecks({ intern, other, admin, anon, leadId: lead!.id, ownerId: riya!.id })
   await podChecks({ intern, other, leader, admin, arjunId: arjun!.id, riyaId: riya!.id, phone: TEST_PHONES[1] })
+  await managerChecks({ intern, other, leader, arjunId: arjun!.id, meeraId: meera!.id, riyaId: riya!.id, phone: "9000000003" })
   await cleanupTestLeads(TEST_PHONES)
 }
 
@@ -189,6 +194,93 @@ async function cleanupTestLeads(phones: string[]) {
     for (const id of ids) await service.from("notifications").delete().eq("link", `/leads/${id}`)
   }
   await service.from("leads").delete().in("phone", phones)
+}
+
+/** Managers: powers the admin switches on, limited to their own pod. Riya runs Arjun's pod. */
+async function managerChecks(c: {
+  intern: SupabaseClient
+  other: SupabaseClient
+  leader: SupabaseClient
+  arjunId: string
+  meeraId: string
+  riyaId: string
+  phone: string
+}) {
+  await cleanupTestLeads([c.phone])
+  const setPerms = (perms: string[]) => service.from("profiles").update({ permissions: perms }).eq("id", c.riyaId)
+  await setPerms([])
+  const manager = await signInAs("sample.riya@example.com")
+  const today = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10)
+  const { data: course } = await service.from("courses").select("id, offer_price").eq("slug", "ai-corporate-analyst").single()
+  const { data: lead } = await c.intern
+    .from("leads")
+    .insert({ name: "Manager Test", phone: c.phone, source: "Campus", course_id: course!.id })
+    .select("id")
+    .single()
+  const { data: pay } = await c.intern
+    .from("payments")
+    .insert({ lead_id: lead!.id, amount: 2500, paid_on: today, txn_ref: `MGR-${Date.now()}` })
+    .select("id")
+    .single()
+
+  const { data: noPower } = await manager.from("payments").update({ status: "Verified" }).eq("id", pay!.id).select()
+  check("A manager without 'approve payments' can't verify", (noPower?.length ?? 0) === 0)
+  await setPerms(["approve_payments"])
+  const { data: verified, error: vErr } = await manager.from("payments").update({ status: "Verified" }).eq("id", pay!.id).select("status, verified_by")
+  check("A manager with 'approve payments' can verify their pod's payment", verified?.[0]?.status === "Verified" && verified[0].verified_by === c.riyaId, vErr?.message)
+  const { data: refund } = await manager.from("payments").update({ status: "Refunded", reason: "test" }).eq("id", pay!.id).select()
+  check("…but can't mark refunds (admins only)", (refund?.length ?? 0) === 0)
+
+  // Meera's pod: Riya must not approve there.
+  const { data: meeraLead } = await c.other
+    .from("leads")
+    .insert({ name: "Other Pod Test", phone: "9000000004", source: "Campus", course_id: course!.id })
+    .select("id")
+    .single()
+  const { data: meeraPay } = await c.other
+    .from("payments")
+    .insert({ lead_id: meeraLead!.id, amount: 2500, paid_on: today, txn_ref: `MGR2-${Date.now()}` })
+    .select("id")
+    .single()
+  const { data: crossPod } = await manager.from("payments").update({ status: "Verified" }).eq("id", meeraPay!.id).select()
+  check("A manager can't approve another pod's payment", (crossPod?.length ?? 0) === 0)
+  const { data: seesOther } = await manager.from("leads").select("id").eq("id", meeraLead!.id)
+  check("A manager can't see another pod's leads", (seesOther?.length ?? 0) === 0)
+
+  const { error: ownPerm } = await manager.from("profiles").update({ permissions: ["approve_payments", "courses"] }).eq("id", c.riyaId)
+  check("A manager can't change their own powers", !!ownPerm)
+  const { error: ownShare } = await manager.from("profiles").update({ commission_pct: 50 }).eq("id", c.riyaId)
+  check("A manager can't change their own share", !!ownShare)
+  const { data: moveIntern } = await manager.from("profiles").update({ pod_id: null }).eq("id", c.arjunId).select()
+  check("A manager can't move people directly in the database", (moveIntern?.length ?? 0) === 0)
+
+  // Flags: only with the power, and only ones touching their pod.
+  await service.from("duplicate_attempts").insert([
+    { lead_id: lead!.id, phone: c.phone, via: "add_lead", attempted_by: c.meeraId },
+    { lead_id: meeraLead!.id, phone: "9000000004", via: "add_lead", attempted_by: c.meeraId },
+  ])
+  const { data: noFlags } = await manager.from("duplicate_attempts").select("id").in("phone", [c.phone, "9000000004"])
+  check("A manager without 'flags' sees no flagged leads", (noFlags?.length ?? 0) === 0)
+  await setPerms(["flags"])
+  const { data: flags } = await manager.from("duplicate_attempts").select("phone").in("phone", [c.phone, "9000000004"])
+  check("A manager with 'flags' sees only their pod's flags", flags?.length === 1 && flags[0].phone === c.phone, JSON.stringify(flags))
+
+  // Courses
+  const { data: noCourse } = await manager.from("courses").update({ typical_close: "x" }).eq("id", course!.id).select()
+  check("A manager without 'courses' can't edit courses", (noCourse?.length ?? 0) === 0)
+  await setPerms(["courses"])
+  const { data: before } = await service.from("courses").select("typical_close").eq("id", course!.id).single()
+  const { data: yesCourse } = await manager.from("courses").update({ typical_close: before!.typical_close }).eq("id", course!.id).select()
+  check("A manager with 'courses' can edit courses", (yesCourse?.length ?? 0) === 1)
+  const { data: delCourse } = await manager.from("courses").delete().eq("id", course!.id).select()
+  check("…but can't delete them", (delCourse?.length ?? 0) === 0)
+
+  const { error: anonPerm } = await createClient(url, anonKey).rpc("has_perm", { p: "courses" })
+  check("Logged-out visitors can't call the permission check", !!anonPerm)
+
+  await setPerms([])
+  await service.from("duplicate_attempts").delete().in("phone", [c.phone, "9000000004"])
+  await cleanupTestLeads([c.phone, "9000000004"])
 }
 
 /** Phase 5: help requests and the pool. Arjun + Riya (leader) share a pod; Meera is elsewhere. */
@@ -250,10 +342,10 @@ async function podChecks(c: {
   const { data: adminNote } = await service
     .from("notifications")
     .select("user_id")
-    .like("text", "%(pod leader) asked for help on Pool Test%")
-  check("A pod leader can ask for help, and it goes to the admins", !leaderHelpErr && (adminNote?.length ?? 0) > 0, leaderHelpErr?.message)
+    .like("text", "Riya%asked for help on Pool Test%")
+  check("A manager can ask for help, and it goes to the admins", !leaderHelpErr && (adminNote?.length ?? 0) > 0, leaderHelpErr?.message)
   const { data: adminTook } = await c.admin.from("help_requests").update({ status: "Handled" }).eq("lead_id", lead.id).eq("requested_by", c.riyaId).select()
-  check("An admin can handle a pod leader's help request", (adminTook?.length ?? 0) === 1)
+  check("An admin can handle a manager's help request", (adminTook?.length ?? 0) === 1)
   await service.from("notifications").delete().like("text", "%asked for help on Pool Test%")
 
   // Deactivated owner → their open leads go to the pool.
@@ -264,7 +356,7 @@ async function podChecks(c: {
   check("A deactivated person's open leads go to the pool", (inactivePool ?? []).some((l: { id: string }) => l.id === lead.id))
 
   const { data: setUpd } = await c.leader.from("settings").update({ pool_hours: 1 }).eq("id", 1).select()
-  check("Pod leaders can't change settings", (setUpd?.length ?? 0) === 0)
+  check("Managers can't change settings", (setUpd?.length ?? 0) === 0)
   await service.from("help_requests").delete().eq("lead_id", lead.id)
 }
 
@@ -308,7 +400,7 @@ async function paymentChecks(c: {
   check("A second payment is blocked when the course has no installments", !!second)
 
   const { data: selfVerify } = await leader.from("payments").update({ status: "Verified" }).eq("id", pay!.id).select()
-  check("Interns and pod leaders can't verify payments", (selfVerify?.length ?? 0) === 0)
+  check("Interns and managers without the power can't verify payments", (selfVerify?.length ?? 0) === 0)
   const { data: anonPay } = await c.anon.from("payments").select("id")
   check("Logged-out visitors can't read payments", (anonPay?.length ?? 0) === 0)
 
@@ -349,12 +441,12 @@ async function paymentChecks(c: {
 }
 
 /**
- * The checks need a known layout: Riya (leader) + Arjun in one test pod, Meera in another.
+ * The checks need a known layout: Riya (manager) + Arjun in one test pod, Meera in another.
  * Whatever pods these sample people are in now is put back afterwards.
  */
 async function main() {
   const emails = ["sample.riya@example.com", "sample.arjun@example.com", "sample.meera@example.com"]
-  const { data: before } = await service.from("profiles").select("id, email, pod_id").in("email", emails)
+  const { data: before } = await service.from("profiles").select("id, email, pod_id, role, permissions, commission_pct").in("email", emails)
   const { data: podsBefore } = await service.from("pods").select("id, leader_id")
   const id = (e: string) => before!.find((p) => p.email === e)!.id
 
@@ -364,12 +456,18 @@ async function main() {
     .select("id")
   if (error) throw error
   try {
+    await service.from("profiles").update({ role: "manager" }).eq("id", id(emails[0]))
     await service.from("profiles").update({ pod_id: testPods![0].id }).in("id", [id(emails[0]), id(emails[1])])
     await service.from("profiles").update({ pod_id: testPods![1].id }).eq("id", id(emails[2]))
     await service.from("pods").update({ leader_id: id(emails[0]) }).eq("id", testPods![0].id)
     await run()
   } finally {
-    for (const p of before!) await service.from("profiles").update({ pod_id: p.pod_id }).eq("id", p.id)
+    for (const p of before!) {
+      await service
+        .from("profiles")
+        .update({ pod_id: p.pod_id, role: p.role, permissions: p.permissions, commission_pct: p.commission_pct })
+        .eq("id", p.id)
+    }
     for (const p of podsBefore!) await service.from("pods").update({ leader_id: p.leader_id }).eq("id", p.id)
     await service.from("pods").delete().in("id", testPods!.map((p) => p.id))
   }

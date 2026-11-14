@@ -1,3 +1,4 @@
+import { requireAdmin } from "@/lib/auth"
 import Link from "next/link"
 import { Download } from "lucide-react"
 import { PageHeader } from "@/components/page-header"
@@ -24,6 +25,7 @@ type VerifiedPayment = {
 
 /** Spec 5.10.1: the admin's view of the whole program. */
 export default async function DashboardPage() {
+  await requireAdmin()
   const supabase = await createClient()
   const today = istDate()
   const [data, { data: payRows }, { data: pending }, { data: leads }, { data: settings }] = await Promise.all([
